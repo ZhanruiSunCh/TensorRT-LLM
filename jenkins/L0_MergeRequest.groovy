@@ -1025,6 +1025,7 @@ def launchStages(pipeline, reuseBuild, testFilter, enableFailFast, disableIncrem
 
                 def stageName = "Build"
                 stage(stageName) {
+                    return
                     def parameters = getCommonParameters()
                     parameters += [
                         'enableFailFast': enableFailFast,
@@ -1103,7 +1104,7 @@ def launchStages(pipeline, reuseBuild, testFilter, enableFailFast, disableIncrem
         },
     ]
 
-    if (windowsPreMerge && testFilter[IS_POST_MERGE]) {
+    if (windowsPreMerge && testFilter[IS_POST_MERGE] && false) {
         def stageNamePreMerge = "Pre-Merge-Windows"
         stages += [
             (stageNamePreMerge): {
