@@ -17,11 +17,13 @@
 name: Bot-Command
 on:
   issue_comment:
-     types: [created]
+    types: [created]
+  pull_request:
+    types: [opened]
 jobs:
   Bot-command-check:
     name: Bot command check
-    if: startsWith( github.event.comment.body, '/bot' )
+    if: github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/bot')
     runs-on: ubuntu-latest
     outputs:
       status: ${{ steps.check.outputs.status }}
