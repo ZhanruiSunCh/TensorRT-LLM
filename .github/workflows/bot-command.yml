@@ -23,7 +23,9 @@ on:
 jobs:
   Bot-command-check:
     name: Bot command check
-    if: github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/bot')
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/bot'))
     runs-on: ubuntu-latest
     outputs:
       status: ${{ steps.check.outputs.status }}
