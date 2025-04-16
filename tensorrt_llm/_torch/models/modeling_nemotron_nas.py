@@ -4,8 +4,6 @@ import torch
 from torch import nn
 from transformers import PretrainedConfig
 
-from tensorrt_llm._torch.distributed import ParallelConfig, TensorParallelMode
-from tensorrt_llm._torch.modules.linear import Linear
 from tensorrt_llm.functional import PositionEmbeddingType
 
 from ..attention_backend import AttentionMetadata
@@ -15,26 +13,10 @@ from ..modules.attention import Attention
 from ..modules.decoder_layer import DecoderLayer
 from ..modules.embedding import Embedding
 from ..modules.gated_mlp import GatedMLP
+from ..modules.linear import Linear, TensorParallelMode
 from ..modules.rms_norm import RMSNorm
-from ..modules.rotary_embedding import RotaryEmbedding
 from .modeling_utils import (DecoderModel, DecoderModelForCausalLM,
                              register_auto_model)
-
-
-class NemotronNASRotaryEmbedding(RotaryEmbedding):
-
-    def __init__(self, config: PretrainedConfig, layer_idx: int):
-        if config.rope_scaling is not None:
-            rope_type = config.rope_scaling.get("rope_type",
-                                                config.rope_scaling.get("type"))
-        else:
-            rope_type = "default"
-        super().__init__(config,
-                         head_dim=config.hidden_size //
-                         config.num_attention_heads,
-                         num_attention_heads=config.num_attention_heads,
-                         max_position_embeddings=config.max_position_embeddings,
-                         rope_type=rope_type)
 
 
 def _ffn_mult_to_intermediate_size(ffn_mult: float, n_embd: int) -> int:
@@ -55,15 +37,9 @@ def _create_linear_from_configs(model_config: ModelConfig[PretrainedConfig],
         config.hidden_size,
         bias=False,
         dtype=config.torch_dtype,
-        parallel_config=ParallelConfig(
-            tensor_parallel_rank=model_config.mapping.tp_rank,
-            tensor_parallel_size=model_config.mapping.tp_size,
-            tensor_parallel_mode=TensorParallelMode.COLUMN,
-            pipeline_parallel_size=model_config.mapping.pp_size,
-            parallel_rank=model_config.mapping.rank,
-            gather_output=True,
-            gpus_per_node=model_config.mapping.gpus_per_node,
-        ),
+        mapping=model_config.mapping,
+        tensor_parallel_mode=TensorParallelMode.COLUMN,
+        gather_output=True,
         quant_config=model_config.get_quant_config(),
         skip_create_weights=model_config.skip_create_weights,
     )
@@ -74,21 +50,16 @@ class NemotronNASAttention(Attention):
     def __init__(self, model_config: ModelConfig[PretrainedConfig],
                  layer_idx: int):
         config = model_config.pretrained_config
-        if model_config.fuse_pos_embd:
-            pos_embd_params = PositionalEmbeddingParams(
-                type=PositionEmbeddingType.rope_gpt_neox,
-                rope=RopeParams.from_config(config),
-            )
-        else:
-            pos_embd_params = None
         super().__init__(
             hidden_size=config.hidden_size,
             num_attention_heads=config.num_attention_heads,
             num_key_value_heads=config.num_key_value_heads[layer_idx],
             max_position_embeddings=config.max_position_embeddings,
             bias=False,
-            pos_embd_params=pos_embd_params,
-            rotary_emb=NemotronNASRotaryEmbedding(config, layer_idx=layer_idx),
+            pos_embd_params=PositionalEmbeddingParams(
+                type=PositionEmbeddingType.rope_gpt_neox,
+                rope=RopeParams.from_config(config),
+            ),
             layer_idx=layer_idx,
             dtype=config.torch_dtype,
             config=model_config)
