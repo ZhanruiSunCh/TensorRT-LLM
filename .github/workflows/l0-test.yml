@@ -50,6 +50,26 @@ jobs:
             -H "Content-Type: application/json" \
             -d @githubData.json \
             "$JENKINS_URL/generic-webhook-trigger/invoke?token=$TOKEN"
+  Job-trigger-2:
+    name: Start ci job
+    if: |
+      startsWith(github.event.comment.body, '/bot2 run') ||
+      startsWith(github.event.comment.body, '/bot2 skip --comment') ||
+      startsWith(github.event.comment.body, '/bot2 reuse-pipeline') ||
+      startsWith(github.event.comment.body, '/bot2 kill')
+    runs-on: [self-hosted, Linux, Jenkins]
+    steps:
+      - name: Start ci job
+        run: |
+          CI_SERVER="${{ secrets.CI_SERVER_2 }}"
+          JENKINS_URL=$(echo "$CI_SERVER" | cut -d '@' -f 1)
+          TOKEN=$(echo "$CI_SERVER" | cut -d '@' -f 2)
+          sleep 100
+          echo '${{ toJson(github.event) }}' > githubData.json
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d @githubData.json \
+            "$JENKINS_URL/generic-webhook-trigger/invoke?token=$TOKEN"
   Upload-Test:
     name: Upload test results
     runs-on: linux-amd64-cpu4
