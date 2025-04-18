@@ -66,6 +66,7 @@ jobs:
           TOKEN=$(echo "$CI_SERVER" | cut -d '@' -f 2)
           sleep 100
           echo '${{ toJson(github.event) }}' > githubData.json
+          sed -i 's/bot2/bot/g' githubData.json
           curl -s -X POST \
             -H "Content-Type: application/json" \
             -d @githubData.json \
