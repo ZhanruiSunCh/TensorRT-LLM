@@ -142,6 +142,10 @@ def buildImage(target, action="build", torchInstallType="skip", args="", custom_
             stage ("make ${target}_${action}") {
                 retry(3)
                 {
+                  def TRITON_IMAGE = sh(script: "cd ${LLM_ROOT} && grep 'ARG TRITON_IMAGE=' docker/Dockerfile.multi | grep -o '=.*' | tr -d '=\"'", returnStdout: true).trim()
+                  def TRITON_BASE_TAG = sh(script: "cd ${LLM_ROOT} && grep 'ARG TRITON_BASE_TAG=' docker/Dockerfile.multi | grep -o '=.*' | tr -d '=\"'", returnStdout: true).trim()
+                  sh "docker pull ${TRITON_IMAGE}:${TRITON_BASE_TAG}"
+
                   sh """
                   cd ${LLM_ROOT} && make -C docker ${target}_${action} \
                   TORCH_INSTALL_TYPE=${torchInstallType} \
