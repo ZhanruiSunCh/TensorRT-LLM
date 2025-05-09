@@ -48,6 +48,11 @@ GITHUB_MIRROR      ?=
 PYTHON_VERSION     ?=
 INSTALL_TRITON     ?= 1
 
+IS_SBSA_BUILD      ?= 0
+ifeq ($(BUILD_ARCH),aarch64)
+  IS_SBSA_BUILD = 1
+endif
+
 define add_local_user
 	docker build \
 		--progress $(DOCKER_PROGRESS) \
@@ -67,9 +72,10 @@ $(shell echo $(IMAGE_WITH_TAG) | sed "s/\/tensorrt-llm:/\/tensorrt-llm-staging:/
 endef
 
 %_build: 
-	@if [ "$(BUILD_ARCH)" = "aarch64" ]; then \
+	@if [ $(IS_SBSA_BUILD) = 1 ]; then \
 		DEVEL_IMAGE=$(if $(findstring 1,$(JENKINS_DEVEL)),$(shell grep 'LLM_SBSA_DOCKER_IMAGE = ' ../jenkins/L0_MergeRequest.groovy | grep -o '".*"' | tr -d '"')); \
-	else \
+	fi
+	@if [ $(IS_SBSA_BUILD) = 0 ]; then \
 		DEVEL_IMAGE=$(if $(findstring 1,$(JENKINS_DEVEL)),$(shell grep 'LLM_DOCKER_IMAGE = ' ../jenkins/L0_MergeRequest.groovy | grep -o '".*"' | tr -d '"')); \
 	fi
 	@echo "BUILD_ARCH value: '$(BUILD_ARCH)'"
