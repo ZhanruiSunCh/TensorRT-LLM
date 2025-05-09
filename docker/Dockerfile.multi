@@ -96,9 +96,6 @@ ENV CCACHE_DIR=/root/.cache/ccache
 ARG BUILD_WHEEL_ARGS="--clean --python_bindings --benchmarks"
 ARG BUILD_ARCH="x86_64"
 RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=/root/.cache/ccache \
-    if [ "$BUILD_ARCH" = "aarch64" ]; then \
-        pip3 install -r requirements-dev.txt; \
-    fi && \
     python3 scripts/build_wheel.py ${BUILD_WHEEL_ARGS}
 
 FROM ${DEVEL_IMAGE} AS release
