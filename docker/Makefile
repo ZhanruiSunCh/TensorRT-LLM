@@ -44,6 +44,10 @@ PYTHON_VERSION     ?=
 INSTALL_TRITON     ?= 1
 BUILD_ARCH         ?= $(shell uname -m)
 
+ifeq ($(BUILD_ARCH),aarch64)
+	BUILD_WHEEL_ARGS += "-a '90-real;100-real;120-real'"
+endif
+
 define add_local_user
 	docker build \
 		--progress $(DOCKER_PROGRESS) \
