@@ -94,8 +94,13 @@ RUN mkdir -p /root/.cache/pip /root/.cache/ccache
 ENV CCACHE_DIR=/root/.cache/ccache
 # Build the TRT-LLM wheel
 ARG BUILD_WHEEL_ARGS="--clean --python_bindings --benchmarks"
+ARG EXTRA_WHEEL_ARGS=""
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ]; then \
+        EXTRA_WHEEL_ARGS="-a '90-real;100-real;120-real'"; \
+    fi
 RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=/root/.cache/ccache \
-    python3 scripts/build_wheel.py ${BUILD_WHEEL_ARGS}
+    python3 scripts/build_wheel.py ${BUILD_WHEEL_ARGS} ${EXTRA_WHEEL_ARGS}
 
 FROM ${DEVEL_IMAGE} AS release
 
