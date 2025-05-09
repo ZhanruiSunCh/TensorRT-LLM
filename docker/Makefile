@@ -42,6 +42,7 @@ TRT_LLM_VERSION    ?= $(shell grep '^__version__' ../tensorrt_llm/version.py | g
 GITHUB_MIRROR      ?=
 PYTHON_VERSION     ?=
 INSTALL_TRITON     ?= 1
+BUILD_ARCH         ?= $(shell uname -m)
 
 define add_local_user
 	docker build \
@@ -81,6 +82,7 @@ endef
 		$(if $(GITHUB_MIRROR), --build-arg GITHUB_MIRROR="$(GITHUB_MIRROR)") \
 		$(if $(PYTHON_VERSION), --build-arg PYTHON_VERSION="$(PYTHON_VERSION)") \
 		$(if $(INSTALL_TRITON), --build-arg INSTALL_TRITON="$(INSTALL_TRITON)") \
+		$(if $(BUILD_ARCH), --build-arg BUILD_ARCH="$(BUILD_ARCH)") \
 		$(if $(STAGE), --target $(STAGE)) \
 		--file Dockerfile.multi \
 		--tag $(IMAGE_WITH_TAG) \
