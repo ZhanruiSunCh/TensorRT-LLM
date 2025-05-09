@@ -130,6 +130,14 @@ def buildImage(target, action="build", torchInstallType="skip", args="", custom_
             }
         }
         try {
+            def build_jobs = BUILD_JOBS
+            if (target == "trtllm") {
+                if (is_sbsa) {
+                    build_jobs = "8"
+                } else {
+                    build_jobs = "16"
+                }
+            }
             containerGenFailure = null
             stage ("make ${target}_${action}") {
                 retry(3)
@@ -138,7 +146,7 @@ def buildImage(target, action="build", torchInstallType="skip", args="", custom_
                   cd ${LLM_ROOT} && make -C docker ${target}_${action} \
                   TORCH_INSTALL_TYPE=${torchInstallType} \
                   IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${tag} \
-                  BUILD_WHEEL_OPTS='-j ${BUILD_JOBS}' ${args} \
+                  BUILD_WHEEL_OPTS='-j ${build_jobs}' ${args} \
                   BUILD_TRITON=1 \
                   GITHUB_MIRROR=https://urm.nvidia.com/artifactory/github-go-remote
                   """
@@ -151,7 +159,7 @@ def buildImage(target, action="build", torchInstallType="skip", args="", custom_
                   cd ${LLM_ROOT} && make -C docker ${target}_${action} \
                   TORCH_INSTALL_TYPE=${torchInstallType} \
                   IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${custom_tag} \
-                  BUILD_WHEEL_OPTS='-j ${BUILD_JOBS}' ${args} \
+                  BUILD_WHEEL_OPTS='-j ${build_jobs}' ${args} \
                   BUILD_TRITON=1 \
                   GITHUB_MIRROR=https://urm.nvidia.com/artifactory/github-go-remote
                   """
