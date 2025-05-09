@@ -67,12 +67,13 @@ $(shell echo $(IMAGE_WITH_TAG) | sed "s/\/tensorrt-llm:/\/tensorrt-llm-staging:/
 endef
 
 %_build: 
-	@if [ $(BUILD_ARCH) = "aarch64" ]; then \
+	@if [ "$(BUILD_ARCH)" = "aarch64" ]; then \
 		DEVEL_IMAGE=$(if $(findstring 1,$(JENKINS_DEVEL)),$(shell grep 'LLM_SBSA_DOCKER_IMAGE = ' ../jenkins/L0_MergeRequest.groovy | grep -o '".*"' | tr -d '"')); \
 	else \
 		DEVEL_IMAGE=$(if $(findstring 1,$(JENKINS_DEVEL)),$(shell grep 'LLM_DOCKER_IMAGE = ' ../jenkins/L0_MergeRequest.groovy | grep -o '".*"' | tr -d '"')); \
 	fi
-	@echo "DEVEL_IMAGE: $(DEVEL_IMAGE)"
+	@echo "BUILD_ARCH value: '$(BUILD_ARCH)'"
+	@echo "DEVEL_IMAGE: '$(DEVEL_IMAGE)'"
 %_build:
 	@echo "Building docker image: $(IMAGE_WITH_TAG)"
 	DOCKER_BUILDKIT=1 docker build $(DOCKER_BUILD_OPTS) $(DOCKER_BUILD_ARGS) \
