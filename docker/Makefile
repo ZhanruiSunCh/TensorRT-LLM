@@ -29,8 +29,13 @@ DOCKER_BUILD_OPTS  ?= --pull
 DOCKER_BUILD_ARGS  ?=
 DOCKER_PROGRESS    ?= auto
 CUDA_ARCHS         ?=
+BUILD_ARCH         ?= $(shell uname -m)
+BUILD_ARCH_ARGS ?=
+ifeq ($(BUILD_ARCH),aarch64)
+  BUILD_ARCH_ARGS = -a '90-real;100-real;120-real'
+endif
 BUILD_WHEEL_OPTS   ?=
-BUILD_WHEEL_ARGS   ?= $(shell grep 'ARG BUILD_WHEEL_ARGS=' Dockerfile.multi | grep -o '=.*' | tr -d '="')$(if $(CUDA_ARCHS), --cuda_architectures $(CUDA_ARCHS))$(if $(BUILD_WHEEL_OPTS), $(BUILD_WHEEL_OPTS))
+BUILD_WHEEL_ARGS   ?= $(shell grep 'ARG BUILD_WHEEL_ARGS=' Dockerfile.multi | grep -o '=.*' | tr -d '="')$(if $(CUDA_ARCHS), --cuda_architectures $(CUDA_ARCHS))$(if $(BUILD_WHEEL_OPTS), $(BUILD_WHEEL_OPTS))$(if $(BUILD_ARCH_ARGS), $(BUILD_ARCH_ARGS))
 TORCH_INSTALL_TYPE ?= skip
 CUDA_VERSION       ?=
 CUDNN_VERSION      ?=
@@ -42,11 +47,6 @@ TRT_LLM_VERSION    ?= $(shell grep '^__version__' ../tensorrt_llm/version.py | g
 GITHUB_MIRROR      ?=
 PYTHON_VERSION     ?=
 INSTALL_TRITON     ?= 1
-BUILD_ARCH         ?= $(shell uname -m)
-
-ifeq ($(BUILD_ARCH),aarch64)
-  BUILD_WHEEL_ARGS += " -a '90-real;100-real;120-real'"
-endif
 
 define add_local_user
 	docker build \
