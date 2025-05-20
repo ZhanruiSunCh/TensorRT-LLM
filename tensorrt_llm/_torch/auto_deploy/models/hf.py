@@ -2,39 +2,73 @@
 
 import json
 import os
-from contextlib import nullcontext
-from typing import Any, Dict, Optional
+import types
+from contextlib import contextmanager, nullcontext
+from typing import Any, Dict, Mapping, Optional
 
 import torch
 import torch.nn as nn
-from accelerate import init_empty_weights
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+from accelerate.utils import modeling
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HFValidationError, validate_repo_id
 from torch._prims_common import DeviceLikeType
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-from transformers.modeling_utils import load_sharded_checkpoint, load_state_dict
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
 
-from ..custom_ops.attention_interface import CacheConfig, PositionalEmbeddingConfig
+from ..custom_ops.attention_interface import CacheConfig
 from ..utils.logger import ad_logger
 from .factory import ModelFactory, ModelFactoryRegistry
 
 
-def _to_maybe_empty(model: nn.Module, device: DeviceLikeType):
-    """A mix of ``model.to(device)`` and ``model.to_empty(device)``.
-
-    If a parameter is already initialized, then we will call `to()` on it. Otherwise, we will
-    initialize it with an empty tensor on the given device.
-
+@contextmanager
+def load_state_dict_with_assign():
     """
-    model._apply(
-        lambda t: torch.empty_like(t, device=device)
-        if t.device == torch.device("meta")
-        else t.to(device)
-    )
+    Context manager that temporarily patches torch.nn.Module.load_state_dict
+    to use assign=True, which directly replaces parameters in the model with those
+    from the loaded state_dict, maintaining their data type and device placement.
+    """
+    # Save the original load_state_dict method
+    original_load_state_dict = torch.nn.Module.load_state_dict
+
+    # Define and apply the patched version
+    def load_state_dict_with_assign(
+        self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
+    ):
+        return original_load_state_dict(self, state_dict, strict=strict, assign=True)
+
+    # Apply the patch
+    torch.nn.Module.load_state_dict = load_state_dict_with_assign
+
+    try:
+        # Allow the context body to execute
+        yield
+    finally:
+        # Restore the original method, even if an exception occurred
+        torch.nn.Module.load_state_dict = original_load_state_dict
 
 
-@ModelFactoryRegistry.register("hf")
-class HFFactory(ModelFactory):
+@contextmanager
+def hf_load_state_dict_with_device(device: DeviceLikeType):
+    """Patch HF load_state_dict to use provided device."""
+    # save the original load_state_dict method
+    original_load_state_dict = modeling.load_state_dict
+
+    # Define and apply the patched version
+    def load_state_dict_with_device(checkpoint_file, device_map=None):
+        return original_load_state_dict(checkpoint_file, device_map={"": device})
+
+    # Apply the patch
+    modeling.load_state_dict = load_state_dict_with_device
+
+    try:
+        yield
+    finally:
+        # Restore the original method, even if an exception occurred
+        modeling.load_state_dict = original_load_state_dict
+
+
+@ModelFactoryRegistry.register("AutoModelForCausalLM")
+class AutoModelForCausalLMFactory(ModelFactory):
     def __init__(
         self,
         model_kwargs: Optional[Dict[str, Any]] = None,
@@ -44,16 +78,66 @@ class HFFactory(ModelFactory):
         super().__init__(**kwargs)
 
         self.model_kwargs = model_kwargs or {}
-        self.model_kwargs["use_cache"] = False
         self.tokenizer_kwargs = tokenizer_kwargs or {}
         self._quant_config = None
-        self._pos_embd_config = None
 
-        if self.ckpt_path:
-            # prefetch if needed
-            self.prefetch_checkpoint()
+        # heuristic to disable use_cache
+        self.model_kwargs["use_cache"] = False
 
-            self._load_quantization_config()
+        # prefetch the model+checkpoint
+        self.prefetch_checkpoint()
+        # load the quantization config
+        self._load_quantization_config()
+
+    @property
+    def autoconfig_from_pretrained(self):
+        return AutoConfig.from_pretrained
+
+    @property
+    def autotokenizer_from_pretrained(self):
+        return AutoTokenizer.from_pretrained
+
+    # TODO (@lucaslie): Do we ever want to switch to from_pretrained?
+    @property
+    def automodel_from_config(self):
+        return AutoModelForCausalLM.from_config
+
+    @staticmethod
+    def _simple_forward(model: nn.Module, input_ids: torch.Tensor, position_ids: torch.Tensor):
+        """A simple forward pass for the model to functionalize the args.
+
+        This follows the standard function signature as expected by factory.py.
+        """
+        return type(model).forward(model, input_ids=input_ids, position_ids=position_ids)
+
+    def _recursive_update_config(self, config: PretrainedConfig, update_dict: Dict[str, Any]):
+        """
+        Recursively update a PretrainedConfig object with values from update_dict.
+
+        Args:
+            config: PretrainedConfig object to update
+            update_dict: Dictionary with values to update in the config
+
+        Returns:
+            The updated PretrainedConfig object
+        """
+        for key, value_new in update_dict.items():
+            # Check if the key exists in config
+            if not hasattr(config, key):
+                continue
+
+            target_value = getattr(config, key)
+
+            # Handle nested PretrainedConfig objects...
+            if isinstance(value_new, dict) and isinstance(target_value, PretrainedConfig):
+                # Recursively update nested configs
+                updated_value = self._recursive_update_config(target_value, value_new)
+                setattr(config, key, updated_value)
+            else:
+                # Direct update for simple values
+                setattr(config, key, value_new)
+
+        return config
 
     def build_model(self, device: DeviceLikeType) -> nn.Module:
         """Build the model on the desired device."""
@@ -61,43 +145,28 @@ class HFFactory(ModelFactory):
         if self._quant_config and self._quant_config.get("quant_algo", None) == "NVFP4":
             self.model_kwargs["torch_dtype"] = torch.half
 
-        model_config = AutoConfig.from_pretrained(
-            self.model, trust_remote_code=True, **self.model_kwargs
-        )
-        get_model_from_config = AutoModelForCausalLM.from_config
+        # NOTE (lucaslie): HF doesn't recursively update nested PreTrainedConfig objects. Instead,
+        # the entire subconfig will be overwritten.
+        # we want to recursively update model_config from model_kwargs here.
+        model_config = self.autoconfig_from_pretrained(self.model, trust_remote_code=True)
+        model_config = self._recursive_update_config(model_config, self.model_kwargs)
 
         with (init_empty_weights if device == "meta" else nullcontext)():
-            default_dtype = torch.get_default_dtype()
-            torch.set_default_dtype(model_config.torch_dtype)
-            model = get_model_from_config(model_config, trust_remote_code=True)
-            torch.set_default_dtype(default_dtype)
+            model = self.automodel_from_config(model_config, trust_remote_code=True)
 
         # post-init --> this must be called explicitly for HF models the way we initialize them since
         # this "gets lost" with the init_empty_weights context manager.
         if hasattr(model, "post_init"):
             model.post_init()
 
-        # Store positional embedding config
-        hf_config: Dict[str, Any] = getattr(model, "config", object())
-
-        # TODO: let's see how we can support more Rope variants in the future
-        self._pos_embd_config = PositionalEmbeddingConfig(
-            mode="rope" if hasattr(hf_config, "rope_theta") else None,
-            rope_theta=getattr(hf_config, "rope_theta", 0.0),
-            rope_scale=1.0,
-        )
+        # patch forward method
+        model.forward = types.MethodType(self._simple_forward, model)
 
         model.eval()
         return model
 
     def get_quant_config(self) -> Dict:
         return self._quant_config or {}
-
-    def get_positional_embedding_config(self):
-        """Return the positional encoding configuration for the model."""
-        assert self._pos_embd_config is not None, "Please call build_model first."
-
-        return self._pos_embd_config
 
     def get_cache_config(self):
         """Setup cache information based on quantization information."""
@@ -114,75 +183,54 @@ class HFFactory(ModelFactory):
 
     def init_tokenizer(self) -> Optional[Any]:
         """Initialize the tokenizer for the model."""
-        if not self.ckpt_path:
+        if not self.model:
             return None
-        return AutoTokenizer.from_pretrained(self.ckpt_path, **self.tokenizer_kwargs)
+        return self.autotokenizer_from_pretrained(self.model, **self.tokenizer_kwargs)
 
     def prefetch_checkpoint(self):
         """Prefetch checkpoint from a HF repo if needed."""
         # already prefetched
         if self._prefetched_path:
             return
-        # nothing to fetch since no ckpt_path
-        if not self._ckpt_path:
-            return
 
         # check if it's a repo id and if so download the repo
         is_hf_repo = True
         try:
-            validate_repo_id(self._ckpt_path)
+            validate_repo_id(self.model)
         except HFValidationError:
             is_hf_repo = False
         if is_hf_repo:
-            # we don't expect to use bin files in this context and they are quite large.
+            # we don't expect to use bin files or pt/pth checkpoint files (they are quite large)
+            ignore_patterns = ["*.bin", "*.pt", "*.pth"]
+            # we will also ignore the .safetensors files if we skip loading weights
+            if self.skip_loading_weights:
+                ignore_patterns.append("*.safetensors")
             ad_logger.info("Pre-fetching checkpoint directory from HF repo.")
-            fetched_dir = snapshot_download(
-                self._ckpt_path, ignore_patterns=["**pytorch_model*.bin*", "**.pt"]
-            )
+            fetched_dir = snapshot_download(self.model, ignore_patterns=ignore_patterns)
         else:
-            fetched_dir = self._ckpt_path
+            fetched_dir = self.model
 
         # at this point it should be a directory (either the original one or the download dir)
         assert os.path.isdir(fetched_dir), f"Checkpoint path {fetched_dir} is not a directory."
 
         self._prefetched_path = fetched_dir
 
-    def _load_checkpoint(self, model, **kwargs):
+    def _load_checkpoint(self, model: nn.Module, device: DeviceLikeType):
         """Load the checkpoint into the model."""
-        # check for ckpt_path
-        if not self.ckpt_path:
+        # check if we skip loading weights
+        if self.skip_loading_weights:
             return
 
         # prefetch if needed
         self.prefetch_checkpoint()
 
-        ckpt_path = self.ckpt_path
-
-        # sharded checkpoint
-        if os.path.isfile(os.path.join(ckpt_path, "model.safetensors.index.json")):
-            _to_maybe_empty(model, device="cpu")
-            load_sharded_checkpoint(model, ckpt_path, strict=False)
-            return
-
-        # look for a single file in the directory ending with .safetensors or .pt/.pth
-        safetensors_files = [f for f in os.listdir(ckpt_path) if f.endswith(".safetensors")]
-        torch_files = [f for f in os.listdir(ckpt_path) if f.endswith((".pt", ".pth"))]
-        if len(safetensors_files) > 1:
-            raise ValueError(f"Multiple .safetensors files in {ckpt_path}: {safetensors_files}")
-        elif len(safetensors_files) == 1:
-            state_dict = load_state_dict(os.path.join(ckpt_path, safetensors_files[0]))
-        elif len(torch_files) > 1:
-            raise ValueError(f"Multiple .pt/.pth files found in {ckpt_path}: {torch_files}")
-        elif len(torch_files) == 1:
-            state_dict = torch.load(os.path.join(ckpt_path, torch_files[0]), **kwargs)
-        else:
-            raise ValueError(f"No checkpoint found in {ckpt_path}")
-
-        model.load_state_dict(state_dict, strict=False, assign=True)
+        # reuse the load checkpoint utility from accelerate
+        with load_state_dict_with_assign(), hf_load_state_dict_with_device(device):
+            load_checkpoint_and_dispatch(model, checkpoint=self.model)
 
     def _load_quantization_config(self):
-        assert self.ckpt_path
-        hf_quant_config_file = os.path.join(self.ckpt_path, "hf_quant_config.json")
+        assert self.model
+        hf_quant_config_file = os.path.join(self.model, "hf_quant_config.json")
         if os.path.exists(hf_quant_config_file):
             with open(hf_quant_config_file, "r") as file:
                 quantization_config = json.load(file)
