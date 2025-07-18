@@ -1,7 +1,7 @@
 {
     "templates": {
         "BatchedGemmFp4LowLatency": {
-            "dtypeElt": "e2m1",
+            "dtypeA": "e2m1",
             "dtypeC": "e2m1",
             "mmaM": 128,
             "mmaN": 8,
@@ -35,7 +35,7 @@
             "useCudaGraph": true
         },
         "BatchedGemmPerTensorScalingFp8LowLatency": {
-            "dtypeElt": "e4m3",
+            "dtypeA": "e4m3",
             "dtypeC": "e4m3",
             "mmaM": 128,
             "mmaN": 8,
@@ -67,7 +67,7 @@
             "useCudaGraph": true
         },
         "BatchedGemmDeepSeekFp8LowLatency": {
-            "dtypeElt": "e4m3",
+            "dtypeA": "e4m3",
             "dtypeC": "e4m3",
             "mmaM": 64,
             "mmaN": 8,
@@ -78,7 +78,6 @@
             "epilogueTileM": 64,
             "epilogueTileN": 8,
             "numStages": 3,
-            "numMmaStages": 1,
             "numSlicesForSplitK": 1,
             "useTwoTmaLoadWarps": true,
             "clusterDimX": 1,
@@ -86,15 +85,17 @@
             "clusterDimZ": 1,
             "sliceK": false,
             "transposeMmaOutput": true,
-            "useShuffledMatrixA": true,
+            "useShuffledMatrixA": false,
             "useDeepSeekFp8": true,
             "useTmaStore": true,
             "useCustomMmaSchedule": true,
+            "numStagesMmaWithinWorkTile": 2,
+            "gridTriggerSecondaryA": false,
             "gridTriggerSecondaryB": true,
             "gridWaitForPrimaryA": false,
             "gridWaitForPrimaryB": true,
-            "numStagesMma": 2,
-            "numStagesMmaWithinWorkTile": 2,
+            "hoistMmaTaskTryWaits": true,
+            "numStagesMma": 4,
             "batch": "N",
             "useMetaFp8": false,
             "numExperts": 128,
@@ -111,6 +112,7 @@
             "dtypeC": ["bf16", "fp16", "e2m1"],
             "listN": "8,8",
             "numExperts": 2,
+            "numStagesMma": 1,
             "tileScheduler": "static"
         },
         {
@@ -122,6 +124,7 @@
             "dtypeC": ["bf16", "fp16", "e4m3"],
             "listN": "8,8",
             "numExperts": 2,
+            "numStagesMma": 1,
             "tileScheduler": "static"
         },
         {
@@ -133,22 +136,33 @@
             "dtypeC": ["bf16", "fp16", "e4m3"],
             "listN": "8,8",
             "numExperts": 2,
+            "numStagesMma": 2,
             "tileScheduler": "static"
         },
         {
-            "_comment": "DS_FP4_FC1",
+            "_comment": "FP4_FC1",
             "_template": "BatchedGemmFp4LowLatency",
             "routeAct": true,
             "fusedAct": true,
+            "sfLayoutB": "linear",
             "useRoutingScalesOnInput": false,
             "useUnrollLoop2xForMma": [true, false],
             "dtypeC": "e2m1",
             "numTokens": 2,
             "numExperts": 2,
-            "tileScheduler": "static"
+            "mmaN,tileN,epilogueTileN,tileK,numStages": [
+                [8, 8, 8, 512, 4],
+                [16, 16, 16, 512, 4],
+                [32, 32, 32, 512, 4],
+                [64, 64, 64, 256, 6]
+            ],
+            "tileScheduler,numStagesMma": [
+                ["static", 1],
+                ["persistent", 2]
+            ]
         },
         {
-            "_comment": "DS_FP4_FC2",
+            "_comment": "FP4_FC2",
             "_template": "BatchedGemmFp4LowLatency",
             "routeAct": false,
             "fusedAct": false,
@@ -157,54 +171,62 @@
             "dtypeC": "bf16",
             "numTokens": 2,
             "numExperts": 2,
-            "numStagesMma": 2,
-            "tileScheduler": "persistent"
-        },
-        {
-            "_comment": "DS_FP4_TP8_EP1_FC2",
-            "_template": "BatchedGemmFp4LowLatency",
-            "routeAct": false,
-            "fusedAct": false,
-            "useRoutingScalesOnInput": false,
-            "useUnrollLoop2xForMma": [true, false],
-            "dtypeC": "bf16",
-            "numTokens": 2,
-            "numExperts": 2,
-            "numStagesMma": 2,
-            "tileK": 256,
-            "numStages": 6,
-            "tileScheduler": "persistent"
+            "tileN,epilogueTileN,mmaN,tileK,numStages": [
+                [8, 8, 8, 512, 4],
+                [16, 16, 16, 512, 4],
+                [32, 32, 32, 512, 4],
+                [64, 64, 64, 512, 3],
+                [8, 8, 8, 256, 6],
+                [16, 16, 16, 256, 6],
+                [32, 32, 32, 256, 6],
+                [64, 64, 64, 256, 6]
+            ],
+            "tileScheduler,numStagesMma": [
+                ["static", 1],
+                ["persistent", 2]
+            ]
         },
         {
             "_comment": "DS_FP8_FC1",
             "_template": "BatchedGemmDeepSeekFp8LowLatency",
             "routeAct": true,
             "fusedAct": false,
-            "useShuffledMatrixA": false,
             "useRoutingScalesOnInput": false,
             "useUnrollLoop2xForMma": [true, false],
             "dtypeC": "e4m3",
             "numTokens": 2,
             "numExperts": 2,
-            "numStages": 8,
-            "numStagesMma": 2,
-            "tileScheduler": "static"
+            "mmaN,tileN,epilogueTileN,numStages": [
+                [8, 8, 8, 8],
+                [16, 16, 16, 6],
+                [32, 32, 32, 4],
+                [64, 64, 64, 4]
+            ],
+            "tileScheduler,numStagesMma": [
+                ["static", 2],
+                ["persistent", 4]
+            ]
         },
         {
             "_comment": "DS_FP8_FC2",
             "_template": "BatchedGemmDeepSeekFp8LowLatency",
             "routeAct": false,
             "fusedAct": false,
-            "useShuffledMatrixA": false,
             "useRoutingScalesOnInput": false,
             "useUnrollLoop2xForMma": [true, false],
             "dtypeC": "bf16",
             "numTokens": 2,
             "numExperts": 2,
-            "numStages": 8,
-            "numStagesMma": 4,
-            "tileScheduler": "persistent",
-            "useTwoMmaWarps": true
+            "mmaN,tileN,epilogueTileN,numStages": [
+                [8, 8, 8, 8],
+                [16, 16, 16, 6],
+                [32, 32, 32, 4],
+                [64, 64, 64, 4]
+            ],
+            "tileScheduler,numStagesMma": [
+                ["static", 2],
+                ["persistent", 4]
+            ]
         },
         {
             "_comment": "Llama4_FP8_FC1",
@@ -231,8 +253,10 @@
             "numTokens": 2,
             "numExperts": 2,
             "numStages": 3,
-            "numStagesMma": 2,
-            "tileScheduler": "persistent"
+            "tileScheduler,numStagesMma": [
+                ["static", 1],
+                ["persistent", 2]
+            ]
         }
     ]
 }

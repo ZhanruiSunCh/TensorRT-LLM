@@ -31,7 +31,7 @@ namespace moe::dev
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define LAUCNCH_ESC(...) __VA_ARGS__
+#define LAUNCH_ESC(...) __VA_ARGS__
 
 #define LAUNCH_PDL(data, coopLaunch, types, kernel, numBlocks, numThreads, smemSize, stream)                           \
     cudaLaunchConfig_t config{};                                                                                       \
@@ -85,31 +85,31 @@ namespace moe::dev
 #define LAUNCH_EXPW(data, kernel, numBlocks, numThreads, smemSize, stream)                                             \
     if (data.mDtypeElt == tg::Dtype::Fp16 && data.mDtypeExpW == tg::Dtype::Fp32)                                       \
     {                                                                                                                  \
-        LAUNCH_PDL(data, false, LAUCNCH_ESC(cutlass::half_t, float), kernel, numBlocks, numThreads, smemSize, stream); \
+        LAUNCH_PDL(data, false, LAUNCH_ESC(cutlass::half_t, float), kernel, numBlocks, numThreads, smemSize, stream);  \
     }                                                                                                                  \
     else if (data.mDtypeElt == tg::Dtype::E4m3 && data.mDtypeExpW == tg::Dtype::Fp32)                                  \
     {                                                                                                                  \
         LAUNCH_PDL(                                                                                                    \
-            data, false, LAUCNCH_ESC(cutlass::float_e4m3_t, float), kernel, numBlocks, numThreads, smemSize, stream);  \
+            data, false, LAUNCH_ESC(cutlass::float_e4m3_t, float), kernel, numBlocks, numThreads, smemSize, stream);   \
     }                                                                                                                  \
     else if (data.mDtypeElt == tg::Dtype::Bfloat16 && data.mDtypeExpW == tg::Dtype::Fp32)                              \
     {                                                                                                                  \
         LAUNCH_PDL(                                                                                                    \
-            data, false, LAUCNCH_ESC(cutlass::bfloat16_t, float), kernel, numBlocks, numThreads, smemSize, stream);    \
+            data, false, LAUNCH_ESC(cutlass::bfloat16_t, float), kernel, numBlocks, numThreads, smemSize, stream);     \
     }                                                                                                                  \
     else if (data.mDtypeElt == tg::Dtype::Fp16 && data.mDtypeExpW == tg::Dtype::Bfloat16)                              \
     {                                                                                                                  \
-        LAUNCH_PDL(data, false, LAUCNCH_ESC(cutlass::half_t, cutlass::bfloat16_t), kernel, numBlocks, numThreads,      \
+        LAUNCH_PDL(data, false, LAUNCH_ESC(cutlass::half_t, cutlass::bfloat16_t), kernel, numBlocks, numThreads,       \
             smemSize, stream);                                                                                         \
     }                                                                                                                  \
     else if (data.mDtypeElt == tg::Dtype::E4m3 && data.mDtypeExpW == tg::Dtype::Bfloat16)                              \
     {                                                                                                                  \
-        LAUNCH_PDL(data, false, LAUCNCH_ESC(cutlass::float_e4m3_t, cutlass::bfloat16_t), kernel, numBlocks,            \
-            numThreads, smemSize, stream);                                                                             \
+        LAUNCH_PDL(data, false, LAUNCH_ESC(cutlass::float_e4m3_t, cutlass::bfloat16_t), kernel, numBlocks, numThreads, \
+            smemSize, stream);                                                                                         \
     }                                                                                                                  \
     else if (data.mDtypeElt == tg::Dtype::Bfloat16 && data.mDtypeExpW == tg::Dtype::Bfloat16)                          \
     {                                                                                                                  \
-        LAUNCH_PDL(data, false, LAUCNCH_ESC(cutlass::bfloat16_t, cutlass::bfloat16_t), kernel, numBlocks, numThreads,  \
+        LAUNCH_PDL(data, false, LAUNCH_ESC(cutlass::bfloat16_t, cutlass::bfloat16_t), kernel, numBlocks, numThreads,   \
             smemSize, stream);                                                                                         \
     }                                                                                                                  \
     else                                                                                                               \
@@ -117,15 +117,51 @@ namespace moe::dev
         TLLM_LOG_ERROR("Unsupported pair");                                                                            \
     }
 
-#define LAUNCH_EXPW_ONLY(data, coopLaunch, kernel, numBlocks, numThreads, smemSize, stream)                            \
+#define LAUNCH_ROUTING(data, coopLaunch, kernel, numBlocks, numThreads, smemSize, stream)                              \
     if (data.mDtypeExpW == tg::Dtype::Fp32)                                                                            \
     {                                                                                                                  \
-        LAUNCH_PDL(data, coopLaunch, LAUCNCH_ESC(void, float), kernel, numBlocks, numThreads, smemSize, stream);       \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(float, float), kernel, numBlocks, numThreads, smemSize, stream);       \
     }                                                                                                                  \
     else if (data.mDtypeExpW == tg::Dtype::Bfloat16)                                                                   \
     {                                                                                                                  \
-        LAUNCH_PDL(data, coopLaunch, LAUCNCH_ESC(void, cutlass::bfloat16_t), kernel, numBlocks, numThreads, smemSize,  \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(__nv_bfloat16, __nv_bfloat16), kernel, numBlocks, numThreads,          \
+            smemSize, stream);                                                                                         \
+    }                                                                                                                  \
+    else                                                                                                               \
+    {                                                                                                                  \
+        TLLM_LOG_ERROR("Unsupported dtypeExpW");                                                                       \
+    }
+
+#define LAUNCH_ROUTING_WITH_EXTRA_FLAG(                                                                                \
+    data, coopLaunch, kernel, numBlocks, numThreads, smemSize, stream, extraFlag, forceFloatInput)                     \
+    if (data.mDtypeExpW == tg::Dtype::Fp32 && extraFlag)                                                               \
+    {                                                                                                                  \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(float, float, true), kernel, numBlocks, numThreads, smemSize, stream); \
+    }                                                                                                                  \
+    else if (data.mDtypeExpW == tg::Dtype::Fp32)                                                                       \
+    {                                                                                                                  \
+        LAUNCH_PDL(                                                                                                    \
+            data, coopLaunch, LAUNCH_ESC(float, float, false), kernel, numBlocks, numThreads, smemSize, stream);       \
+    }                                                                                                                  \
+    else if (data.mDtypeExpW == tg::Dtype::Bfloat16 && extraFlag && forceFloatInput)                                   \
+    {                                                                                                                  \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(float, __nv_bfloat16, true), kernel, numBlocks, numThreads, smemSize,  \
             stream);                                                                                                   \
+    }                                                                                                                  \
+    else if (data.mDtypeExpW == tg::Dtype::Bfloat16 && extraFlag)                                                      \
+    {                                                                                                                  \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(__nv_bfloat16, __nv_bfloat16, true), kernel, numBlocks, numThreads,    \
+            smemSize, stream);                                                                                         \
+    }                                                                                                                  \
+    else if (data.mDtypeExpW == tg::Dtype::Bfloat16 && forceFloatInput)                                                \
+    {                                                                                                                  \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(float, __nv_bfloat16, false), kernel, numBlocks, numThreads, smemSize, \
+            stream);                                                                                                   \
+    }                                                                                                                  \
+    else if (data.mDtypeExpW == tg::Dtype::Bfloat16)                                                                   \
+    {                                                                                                                  \
+        LAUNCH_PDL(data, coopLaunch, LAUNCH_ESC(__nv_bfloat16, __nv_bfloat16, false), kernel, numBlocks, numThreads,   \
+            smemSize, stream);                                                                                         \
     }                                                                                                                  \
     else                                                                                                               \
     {                                                                                                                  \
@@ -139,7 +175,7 @@ namespace activation
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-namespace tg = trtllm::gen;
+namespace tg = batchedGemm::trtllm::gen;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -210,7 +246,7 @@ namespace convertsf
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-namespace tg = trtllm::gen;
+namespace tg = batchedGemm::trtllm::gen;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -267,7 +303,7 @@ namespace permute
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-namespace tg = trtllm::gen;
+namespace tg = batchedGemm::trtllm::gen;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -337,7 +373,7 @@ namespace finalize
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-namespace tg = trtllm::gen;
+namespace tg = batchedGemm::trtllm::gen;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 

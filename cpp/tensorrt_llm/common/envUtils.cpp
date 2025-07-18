@@ -61,13 +61,13 @@ std::optional<std::string> getStrEnv(char const* name)
 }
 
 // Returns true if the env variable exists and is set to "1"
-static bool getBoolEnv(char const* name)
+bool getBoolEnv(char const* name)
 {
     char const* env = std::getenv(name);
     return env && env[0] == '1' && env[1] == '\0';
 }
 
-std::string trim(std::string const& str)
+static std::string trim(std::string const& str)
 {
     size_t start = str.find_first_not_of(" \t\n\r");
     size_t end = str.find_last_not_of(" \t\n\r");
@@ -75,7 +75,7 @@ std::string trim(std::string const& str)
 }
 
 // Parse memory size
-size_t parseMemorySize(std::string const& input)
+static size_t parseMemorySize(std::string const& input)
 {
     std::string str = trim(input);
 
@@ -261,6 +261,12 @@ bool getEnvUseMPIKvCache()
     return useMPIKVCache;
 }
 
+bool getEnvUseNixlKvCache()
+{
+    static bool const useNixlKvCache = getBoolEnv("TRTLLM_USE_NIXL_KVCACHE");
+    return useNixlKvCache;
+}
+
 std::string getEnvUCXInterface()
 {
     static std::once_flag flag;
@@ -278,10 +284,33 @@ std::string getEnvUCXInterface()
     return ucxInterface;
 }
 
+std::string getEnvNixlInterface()
+{
+    static std::once_flag flag;
+    static std::string nixlInterface;
+
+    std::call_once(flag,
+        [&]()
+        {
+            char const* nixl_interface = std::getenv("TRTLLM_NIXL_INTERFACE");
+            if (nixl_interface)
+            {
+                nixlInterface = nixl_interface;
+            }
+        });
+    return nixlInterface;
+}
+
 bool getEnvDisaggLayerwise()
 {
     static bool const disaggLayerwise = getBoolEnv("TRTLLM_DISAGG_LAYERWISE");
     return disaggLayerwise;
+}
+
+bool getEnvDisableSelectiveCacheTransfer()
+{
+    static bool const disableSelectiveCacheTransfer = getBoolEnv("TRTLLM_DISABLE_SELECTIVE_CACHE_TRANSFER");
+    return disableSelectiveCacheTransfer;
 }
 
 bool getEnvParallelCacheSend()
@@ -359,6 +388,12 @@ bool getEnvKVCacheTransferUseAsyncBuffer()
     return useAsyncBuffer;
 }
 
+bool getEnvKVCacheTransferUseSyncBuffer()
+{
+    static bool const useSyncBuffer = getBoolEnv("TRTLLM_KVCACHE_TRANSFER_USE_SYNC_BUFFER");
+    return useSyncBuffer;
+}
+
 size_t getEnvKVCacheSendMaxConcurrenceNum()
 {
 
@@ -392,6 +427,22 @@ size_t getEnvMemSizeForKVCacheTransferBuffer()
         });
 
     return memSizeForKVCacheTransferBuffer;
+}
+
+uint16_t getEnvNixlPort()
+{
+    static uint16_t const nixlPort = getUInt64Env("TRTLLM_NIXL_PORT").value_or(0);
+    return nixlPort;
+}
+
+bool getEnvDisaggBenchmarkGenOnly()
+{
+    return getBoolEnv("TRTLLM_DISAGG_BENCHMARK_GEN_ONLY");
+}
+
+bool getEnvDisableChunkedAttentionInGenPhase()
+{
+    return getBoolEnv("TRTLLM_DISABLE_CHUNKED_ATTENTION_IN_GEN_PHASE");
 }
 
 } // namespace tensorrt_llm::common

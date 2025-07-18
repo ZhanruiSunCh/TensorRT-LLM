@@ -1,17 +1,24 @@
+@coderabbitai summary
 
-# PR title
+<!--
+Please write the PR title by following this template:
 
-Please write the PR title by following template:
+[JIRA ticket/NVBugs ID/GitHub issue][fix/feat/doc/infra/...] \<summary of this PR\>
 
-[JIRA ticket link/nvbug link/github issue link][fix/feat/doc/infra/...] \<summary of this PR\>
-
-For example, assume I have a PR hope to support a new feature about cache manager of Jira TRTLLM-1000 ticket, it would be like
+For example, assume I have a PR to support a new feature about cache manager for JIRA ticket TRTLLM-1000, it would be like:
 
 [TRTLLM-1000][feat] Support a new feature about cache manager
 
+Or I have a PR to fix a Llama3 accuracy issue:
+
+[https://nvbugs/1234567][fix] Fix Llama3 accuracy issue
+-->
+
 ## Description
 
+<!--
 Please explain the issue and the solution in short.
+-->
 
 ## Test Coverage
 
@@ -52,6 +59,8 @@ Launch build/test pipelines. All previously running jobs will be killed.
 `--post-merge ` *(OPTIONAL)* : Run the L0 post-merge pipeline instead of the ordinary L0 pre-merge pipeline.
 
 `--extra-stage "H100_PCIe-[Post-Merge]-1, xxx"` *(OPTIONAL)* : Run the ordinary L0 pre-merge pipeline and specified test stages. Examples: --extra-stage "H100_PCIe-[Post-Merge]-1, xxx".
+
+For guidance on mapping tests to stage names, see `docs/source/reference/ci-overview.md`.
 
 ### kill
 
