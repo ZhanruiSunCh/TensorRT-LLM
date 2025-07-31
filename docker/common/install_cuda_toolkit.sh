@@ -5,7 +5,7 @@ set -ex
 # This script is used for reinstalling CUDA on Rocky Linux 8 with the run file.
 # CUDA version is usually aligned with the latest NGC CUDA image tag.
 # Only use when public CUDA image is not ready.
-CUDA_VER="12.9.0_575.51.03"
+CUDA_VER="13.0.0_580.65.02"
 CUDA_VER_SHORT="${CUDA_VER%_*}"
 
 NVCC_VERSION_OUTPUT=$(nvcc --version)
@@ -16,7 +16,8 @@ reinstall_rockylinux_cuda() {
     dnf -y install epel-release
     dnf remove -y "cuda*" "*cublas*" "*cufft*" "*cufile*" "*curand*" "*cusolver*" "*cusparse*" "*gds-tools*" "*npp*" "*nvjpeg*" "nsight*" "*nvvm*"
     rm -rf /usr/local/cuda-${OLD_CUDA_VER}
-    wget -q https://developer.download.nvidia.com/compute/cuda/${CUDA_VER_SHORT}/local_installers/cuda_${CUDA_VER}_linux.run
+    # wget -q https://developer.download.nvidia.com/compute/cuda/${CUDA_VER_SHORT}/local_installers/cuda_${CUDA_VER}_linux.run
+    wget -q https://cuda-repo.nvidia.com/release-candidates/kitpicks/cuda-r13-0/${CUDA_VER_SHORT}/041/local_installers/cuda_${CUDA_VER}_linux.run
     sh cuda_${CUDA_VER}_linux.run --silent --override --toolkit
     rm -f cuda_${CUDA_VER}_linux.run
 }
