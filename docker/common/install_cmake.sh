@@ -26,8 +26,3 @@ rm -rf /usr/local/${CMAKE_FILE_NAME}/share/emacs
 rm -rf /usr/local/${CMAKE_FILE_NAME}/share/vim
 
 echo 'export PATH=/usr/local/cmake/bin:$PATH' >> "${ENV}"
-
-apt update
-apt remove -y ibverbs-providers libibverbs1
-apt install -y libibverbs-dev
-apt install -y libstdc++-14-dev

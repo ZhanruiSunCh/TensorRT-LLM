@@ -44,6 +44,7 @@ cleanup() {
 
 init_ubuntu() {
   apt-get update
+  apt remove -y ibverbs-providers libibverbs1
   apt-get install -y --no-install-recommends \
     ccache \
     gdb \
@@ -54,6 +55,7 @@ init_ubuntu() {
     libclang-rt-dev \
     libffi-dev \
     libibverbs-dev \
+    libstdc++-14-dev \
     libnuma1 \
     libnuma-dev \
     python3-dev \
