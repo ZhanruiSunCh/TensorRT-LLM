@@ -3,7 +3,7 @@
 set -ex
 
 ARCH=$(uname -m)
-CMAKE_VERSION="3.30.2"
+CMAKE_VERSION="4.0.3"
 GITHUB_URL="https://github.com"
 if [ -n "${GITHUB_MIRROR}" ]; then
     GITHUB_URL=${GITHUB_MIRROR}
@@ -26,3 +26,8 @@ rm -rf /usr/local/${CMAKE_FILE_NAME}/share/emacs
 rm -rf /usr/local/${CMAKE_FILE_NAME}/share/vim
 
 echo 'export PATH=/usr/local/cmake/bin:$PATH' >> "${ENV}"
+
+apt update
+apt remove -y ibverbs-providers libibverbs1
+apt install -y libibverbs-dev
+apt install -y libstdc++-14-dev
