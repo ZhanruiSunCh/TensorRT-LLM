@@ -137,7 +137,7 @@ install_tensorrt() {
         fi
     fi
 
-    wget --no-verbose ${RELEASE_URL_TRT} -O /tmp/TensorRT.tar
+    wget --no-verbose --no-check-certificate ${RELEASE_URL_TRT} -O /tmp/TensorRT.tar
     tar -xf /tmp/TensorRT.tar -C /usr/local/
     mv /usr/local/TensorRT-${TRT_VER} /usr/local/tensorrt
     pip3 install --no-cache-dir /usr/local/tensorrt/python/tensorrt-*-cp${PARSED_PY_VERSION}-*.whl
