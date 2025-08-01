@@ -141,7 +141,9 @@ install_tensorrt() {
         fi
     fi
 
-    wget --no-verbose --no-check-certificate ${RELEASE_URL_TRT} -O /tmp/TensorRT.tar
+    # Download TensorRT (6GB file, needs longer timeout)
+    echo "Downloading TensorRT from: ${RELEASE_URL_TRT}"
+    wget --progress=bar:force --no-check-certificate --tries=3 --timeout=1800 ${RELEASE_URL_TRT} -O /tmp/TensorRT.tar
     tar -xf /tmp/TensorRT.tar -C /usr/local/
     mv /usr/local/TensorRT-${TRT_VER} /usr/local/tensorrt
     pip3 install --no-cache-dir /usr/local/tensorrt/python/tensorrt-*-cp${PARSED_PY_VERSION}-*.whl
