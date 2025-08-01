@@ -2,7 +2,7 @@
 
 set -ex
 
-TRT_VER="10.13.2.2"
+TRT_VER="10.13.2.4"
 # Align with the pre-installed cuDNN / cuBLAS / NCCL versions from
 # https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-08.html#rel-25-08
 CUDA_VER="13.0" # 13.0.0
@@ -135,9 +135,9 @@ install_tensorrt() {
         if [ "$ARCH" = "amd64" ];then ARCH="x86_64";fi
         #RELEASE_URL_TRT="https://developer.nvidia.com/downloads/compute/machine-learning/tensorrt/${TRT_VER_SHORT}/tars/TensorRT-${TRT_VER}.Linux.${ARCH}-gnu.cuda-${TRT_CUDA_VERSION}.tar.gz"
         if [ "$ARCH" = "x86_64" ];then
-            RELEASE_URL_TRT="https://cuda-repo.nvidia.com/release-candidates/Libraries/TensorRT/v10.13/${TRT_VER}-53e0399a/13.0-r580/Linux-x64-manylinux_2_28/tar/TensorRT-${TRT_VER}.Linux.x86_64-gnu.cuda-${TRT_CUDA_VERSION}.tar.gz"
+            RELEASE_URL_TRT="https://cuda-repo.nvidia.com/release-candidates/Libraries/TensorRT/v10.13/${TRT_VER}-3bc61616/13.0-r580/Linux-x64-manylinux_2_28/tar/TensorRT-${TRT_VER}.Linux.x86_64-gnu.cuda-${TRT_CUDA_VERSION}.tar.gz"
         else
-            RELEASE_URL_TRT="https://cuda-repo.nvidia.com/release-candidates/Libraries/TensorRT/v10.13/${TRT_VER}-53e0399a/13.0-r580/Linux-aarch64-manylinux_2_35/tar/TensorRT-${TRT_VER}.Linux.aarch64-gnu.cuda-${TRT_CUDA_VERSION}.tar.gz"
+            RELEASE_URL_TRT="https://cuda-repo.nvidia.com/release-candidates/Libraries/TensorRT/v10.13/${TRT_VER}-3bc61616/13.0-r580/Linux-aarch64-manylinux_2_35/tar/TensorRT-${TRT_VER}.Linux.aarch64-gnu.cuda-${TRT_CUDA_VERSION}.tar.gz"
         fi
     fi
 
