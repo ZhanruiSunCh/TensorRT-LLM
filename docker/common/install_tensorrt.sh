@@ -16,7 +16,7 @@ NCCL_VER="2.27.6-1+cuda13.0"
 CUBLAS_VER="13.0.0.19-1"
 # Align with the pre-installed CUDA / NVCC / NVRTC versions from
 # https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html
-NVRTC_VER="13.0.39-1"
+NVRTC_VER="13.0.48-1"
 CUDA_RUNTIME="13.0.37-1"
 CUDA_DRIVER_VERSION="580.65.02-1.el8"
 
@@ -40,12 +40,16 @@ fi
 install_ubuntu_requirements() {
     apt-get update && apt-get install -y --no-install-recommends gnupg2 curl ca-certificates
     ARCH=$(uname -m)
-    if [ "$ARCH" = "amd64" ];then ARCH="x86_64";fi
-    if [ "$ARCH" = "aarch64" ];then ARCH="sbsa";fi
+    if [ "$ARCH" = "amd64" ];then ARCH="x86_64" && ARCH2="amd64";fi
+    if [ "$ARCH" = "aarch64" ];then ARCH="sbsa" && ARCH2="arm64";fi
 
     curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/${ARCH}/cuda-keyring_1.1-1_all.deb
     dpkg -i cuda-keyring_1.1-1_all.deb
     rm cuda-keyring_1.1-1_all.deb
+
+    wget https://urm.nvidia.com/artifactory/sw-gpu-cuda-installer-generic-local/packaging/r13.0/cuda_nvrtc/linux-${ARCH}/13.0.48/cuda-nvrtc-dev-13-0_13.0.48-1_${ARCH2}.deb && \
+    dpkg -i cuda-nvrtc-dev-13-0_13.0.48-1_${ARCH2}.deb && \
+    rm cuda-nvrtc-dev-13-0_13.0.48-1_${ARCH2}.deb
 
     # apt-get update
     # if [[ $(apt list --installed | grep libcudnn9) ]]; then
