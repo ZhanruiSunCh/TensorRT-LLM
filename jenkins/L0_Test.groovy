@@ -255,24 +255,22 @@ def runLLMTestlistOnSlurm(pipeline, platform, testList, config=VANILLA_CONFIG, p
             }
         }
 
-        stage('Checking if the Node is Online') {
-            def counter = 0
-            while (!CloudManager.isNodeOnline(nodeName) && counter < 12) {
-                sleep(time: 10, unit: 'MINUTES')  // Wait 10 minutes to check status of the node again
-                counter++
-            }
+        def counter = 0
+        while (!CloudManager.isNodeOnline(nodeName) && counter < 12) {
+            sleep(time: 10, unit: 'MINUTES')  // Wait 10 minutes to check status of the node again
+            counter++
+        }
 
-            if (CloudManager.isNodeOnline(nodeName)) {
-                def dockerArgs = "--gpus ${gpuCount} --cap-add=SYS_ADMIN --ipc=host --security-opt seccomp=unconfined  -u root:root -v /home/scratch.trt_llm_data:/scratch.trt_llm_data:ro -v /tmp/ccache:${CCACHE_DIR}:rw -v /tmp/pipcache/http-v2:/root/.cache/pip/http-v2:rw --cap-add syslog"
+        if (CloudManager.isNodeOnline(nodeName)) {
+            def dockerArgs = "--gpus ${gpuCount} --cap-add=SYS_ADMIN --ipc=host --security-opt seccomp=unconfined  -u root:root -v /home/scratch.trt_llm_data:/scratch.trt_llm_data:ro -v /tmp/ccache:${CCACHE_DIR}:rw -v /tmp/pipcache/http-v2:/root/.cache/pip/http-v2:rw --cap-add syslog"
 
-                if (partition.clusterName == "dlcluster") {
-                    dockerArgs += " -e NVIDIA_IMEX_CHANNELS=0"
-                }
-                slurmRunner = runInDockerOnNodeMultiStage(LLM_DOCKER_IMAGE, nodeName, dockerArgs, false)
-                executeLLMTestOnSlurm(pipeline, platform, testList, config, perfMode, stageName, splitId, splits, skipInstallWheel, cpver, slurmRunner)
-            } else {
-                echo "The node does not come online in 2 hours, terminating the job"
+            if (partition.clusterName == "dlcluster") {
+                dockerArgs += " -e NVIDIA_IMEX_CHANNELS=0"
             }
+            slurmRunner = runInDockerOnNodeMultiStage(LLM_DOCKER_IMAGE, nodeName, dockerArgs, false)
+            executeLLMTestOnSlurm(pipeline, platform, testList, config, perfMode, stageName, splitId, splits, skipInstallWheel, cpver, slurmRunner)
+        } else {
+            echo "The node does not come online in 2 hours, terminating the job"
         }
     } finally {
         cleanUpNodeResources(pipeline, cluster, nodeName)
