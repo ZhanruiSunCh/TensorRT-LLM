@@ -254,11 +254,12 @@ def runLLMTestlistOnSlurm(pipeline, platform, testList, config=VANILLA_CONFIG, p
                 Utils.exec(pipeline, script: "echo Sleeping to allow agent initialization; sleep 30")
             }
         }
-
-        def counter = 0
-        while (!CloudManager.isNodeOnline(nodeName) && counter < 12) {
-            sleep(time: 10, unit: 'MINUTES')  // Wait 10 minutes to check status of the node again
-            counter++
+        stage('Checking if the Node is Online') {
+            def counter = 0
+            while (!CloudManager.isNodeOnline(nodeName) && counter < 12) {
+                sleep(time: 10, unit: 'MINUTES')  // Wait 10 minutes to check status of the node again
+                counter++
+            }
         }
 
         if (CloudManager.isNodeOnline(nodeName)) {
