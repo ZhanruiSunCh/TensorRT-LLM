@@ -5,10 +5,13 @@ import time
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 
+import torch
+from openai.types.chat import ChatCompletionAssistantMessageParam
 from openai.types.chat import \
     ChatCompletionContentPartParam as OpenAIChatCompletionContentPartParam
 from openai.types.chat import \
     ChatCompletionMessageParam as OpenAIChatCompletionMessageParam
+from openai_harmony import ReasoningEffort
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Annotated, Required, TypedDict
 
@@ -16,7 +19,34 @@ from tensorrt_llm.executor.request import LoRARequest
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 from tensorrt_llm.llmapi import GuidedDecodingParams, SamplingParams
 
-from ..sampling_params import LogitBiasLogitsProcessor
+
+def _logit_bias_to_embedding_bias(logit_bias: Optional[Dict[str, float]],
+                                  vocab_size: int) -> Optional[torch.Tensor]:
+    """Convert OpenAI logit_bias dict to embedding_bias tensor for sampling."""
+    if logit_bias is None:
+        return None
+
+    # Create 1D zeros tensor as expected by executor API (will be unsqueezed to [1, vocab_size] internally)
+    embedding_bias = torch.zeros(vocab_size, dtype=torch.float32)
+
+    # Apply biases for specified token IDs
+    for token_str, bias in logit_bias.items():
+        try:
+            token_id = int(token_str)
+            if 0 <= token_id < vocab_size:
+                embedding_bias[token_id] = bias
+            else:
+                raise ValueError(
+                    f"Token ID {token_id} out of vocabulary range [0, {vocab_size})"
+                )
+        except ValueError as e:
+            if "invalid literal" in str(e):
+                raise ValueError(
+                    f"Invalid logit_bias key '{token_str}': must be a valid integer token ID"
+                )
+            raise
+
+    return embedding_bias
 
 
 class OpenAIBaseModel(BaseModel):
@@ -100,6 +130,7 @@ class CompletionResponseChoice(OpenAIBaseModel):
             "including encountering the EOS token"),
     )
     disaggregated_params: Optional[DisaggregatedParams] = Field(default=None)
+    avg_decoded_tokens_per_iter: Optional[float] = Field(default=None)
 
 
 class CompletionResponse(OpenAIBaseModel):
@@ -127,6 +158,7 @@ class CompletionResponseStreamChoice(OpenAIBaseModel):
             "to stop, None if the completion finished for some other reason "
             "including encountering the EOS token"),
     )
+    avg_decoded_tokens_per_iter: Optional[float] = Field(default=None)
 
 
 class CompletionStreamResponse(OpenAIBaseModel):
@@ -225,7 +257,7 @@ class CompletionRequest(OpenAIBaseModel):
 
     # doc: end-completion-extra-params
 
-    def to_sampling_params(self) -> SamplingParams:
+    def to_sampling_params(self, vocab_size: int = 32000) -> SamplingParams:
         sampling_params = SamplingParams(
             best_of=self.best_of,
             frequency_penalty=self.frequency_penalty,
@@ -258,8 +290,8 @@ class CompletionRequest(OpenAIBaseModel):
             detokenize=self.detokenize,
 
             # logits_bias
-            logits_processor=None if not self.logit_bias else
-            LogitBiasLogitsProcessor(self.logit_bias),
+            embedding_bias=_logit_bias_to_embedding_bias(
+                self.logit_bias, vocab_size),
 
             # completion-extra-params
             add_special_tokens=self.add_special_tokens,
@@ -297,6 +329,11 @@ class FunctionCall(OpenAIBaseModel):
     arguments: str
 
 
+class DeltaFunctionCall(OpenAIBaseModel):
+    name: Optional[str] = None
+    arguments: Optional[str] = None
+
+
 class ToolCall(OpenAIBaseModel):
     id: str = Field(
         default_factory=lambda: f"chatcmpl-tool-{str(uuid.uuid4().hex)}")
@@ -304,10 +341,18 @@ class ToolCall(OpenAIBaseModel):
     function: FunctionCall
 
 
+class DeltaToolCall(OpenAIBaseModel):
+    id: Optional[str] = None
+    type: Optional[Literal["function"]] = None
+    index: int
+    function: Optional[DeltaFunctionCall] = None
+
+
 class ChatMessage(OpenAIBaseModel):
     role: str
-    content: str
+    content: Optional[str] = None
     reasoning_content: Optional[str] = None
+    reasoning: Optional[str] = None
     tool_calls: List[ToolCall] = Field(default_factory=list)
 
 
@@ -348,8 +393,14 @@ class CustomChatCompletionMessageParam(TypedDict, total=False):
     """
 
 
+class ReasoningAssistantMessage(ChatCompletionAssistantMessageParam):
+    """Assistant message that includes reasoning tokens."""
+    reasoning: Optional[str]
+
+
 ChatCompletionMessageParam = Union[OpenAIChatCompletionMessageParam,
-                                   CustomChatCompletionMessageParam]
+                                   CustomChatCompletionMessageParam,
+                                   ReasoningAssistantMessage]
 
 
 class ChatCompletionLogProbs(OpenAIBaseModel):
@@ -362,8 +413,12 @@ class ChatCompletionResponseChoice(OpenAIBaseModel):
     logprobs: Optional[ChatCompletionLogProbs] = None
     finish_reason: Optional[str] = None
     stop_reason: Optional[Union[int, str]] = None
+    # TODO: progressivly add more info like input_ids, specific_token_ids, mrope, mm_hashes, etc
+    # TODO: and use a JSON-safe handle to refer to the server-side output
+    mm_embedding_handle: Optional[Dict[str, Any]] = None
 
     disaggregated_params: Optional[DisaggregatedParams] = Field(default=None)
+    avg_decoded_tokens_per_iter: Optional[float] = Field(default=None)
 
 
 class ChatCompletionResponse(OpenAIBaseModel):
@@ -382,7 +437,9 @@ class DeltaMessage(OpenAIBaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
     reasoning_content: Optional[str] = None
-    tool_calls: List[ToolCall] = Field(default_factory=list)
+    # For GPT-OSS style reasoning
+    reasoning: Optional[str] = None
+    tool_calls: Optional[List[DeltaToolCall]] = None
 
 
 class ChatCompletionResponseStreamChoice(OpenAIBaseModel):
@@ -391,6 +448,7 @@ class ChatCompletionResponseStreamChoice(OpenAIBaseModel):
     logprobs: Optional[ChatCompletionLogProbs] = None
     finish_reason: Optional[str] = None
     stop_reason: Optional[Union[int, str]] = None
+    avg_decoded_tokens_per_iter: Optional[float] = Field(default=None)
 
 
 class ChatCompletionStreamResponse(OpenAIBaseModel):
@@ -434,8 +492,8 @@ class ChatCompletionRequest(OpenAIBaseModel):
     logit_bias: Optional[Dict[str, float]] = None
     logprobs: Optional[int] = None
     top_logprobs: Optional[int] = 0
-    max_completion_tokens: int = Field(default=None,
-                                       validation_alias='max_tokens')
+    max_completion_tokens: Optional[int] = Field(default=None,
+                                                 validation_alias='max_tokens')
     n: int = 1
     presence_penalty: Optional[float] = 0.0
     response_format: Optional[ResponseFormat] = None
@@ -446,9 +504,17 @@ class ChatCompletionRequest(OpenAIBaseModel):
     temperature: Optional[float] = 1.0
     top_p: Optional[float] = 1.0
     tools: Optional[List[ChatCompletionToolsParam]] = None
-    tool_choice: Optional[Union[Literal["none"],
+    tool_choice: Optional[Union[Literal["none", "auto"],
                                 ChatCompletionNamedToolChoiceParam]] = "none"
     user: Optional[str] = None
+    reasoning_effort: Optional[ReasoningEffort | Literal[
+        "low", "medium", "high"]] = Field(
+            default=ReasoningEffort.LOW,
+            description=(
+                "The level of reasoning effort to use. Controls how much "
+                "reasoning is shown in the model's response. Options: "
+                "'low', 'medium', 'high'."),
+        )
 
     # doc: begin-chat-completion-sampling-params
     best_of: Optional[int] = None
@@ -521,7 +587,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
 
     # doc: end-chat-completion-extra-params
 
-    def to_sampling_params(self) -> SamplingParams:
+    def to_sampling_params(self, vocab_size: int = 32000) -> SamplingParams:
 
         sampling_params = SamplingParams(
             frequency_penalty=self.frequency_penalty,
@@ -553,8 +619,8 @@ class ChatCompletionRequest(OpenAIBaseModel):
                 self.response_format),
 
             # logits_bias
-            logits_processor=None if not self.logit_bias else
-            LogitBiasLogitsProcessor(self.logit_bias),
+            embedding_bias=_logit_bias_to_embedding_bias(
+                self.logit_bias, vocab_size),
 
             # chat-completion-extra-params
             add_special_tokens=self.add_special_tokens,
@@ -575,9 +641,9 @@ class ChatCompletionRequest(OpenAIBaseModel):
     @model_validator(mode="before")
     @classmethod
     def check_tool_choice(cls, data):
+        if "tool_choice" not in data and data.get("tools"):
+            data["tool_choice"] = "auto"
         if "tool_choice" in data and data["tool_choice"] != "none":
-            if not isinstance(data["tool_choice"], dict):
-                raise ValueError("Currently only named tools are supported.")
             if "tools" not in data or data["tools"] is None:
                 raise ValueError(
                     "When using `tool_choice`, `tools` must be set.")
