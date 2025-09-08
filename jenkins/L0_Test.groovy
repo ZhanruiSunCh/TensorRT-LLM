@@ -765,8 +765,8 @@ def createKubernetesPodConfig(image, type, arch = "amd64", gpuCount = 1, perfMod
                               - key: "kubernetes.io/hostname"
                                 operator: In
                                 values:
-                                - "lego-cg1-qct-080.ipp3a2.colossus“
-                                - "lego-cg1-qct-081.ipp3a2.colossus”
+                                - "lego-cg1-qct-080.ipp3a2.colossus"
+                                - "lego-cg1-qct-081.ipp3a2.colossus"
                                 - "lego-cg1-qct-082.ipp3a2.colossus\""""
     }
 
