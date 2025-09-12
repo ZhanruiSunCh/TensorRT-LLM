@@ -1,4 +1,4 @@
-@Library(['bloom-jenkins-shared-lib@main', 'trtllm-jenkins-shared-lib@main']) _
+@Library(['bloom-jenkins-shared-lib@main', 'trtllm-jenkins-shared-lib@user/zhanruis/add_nvdf_for_jenkins']) _
 
 import java.lang.InterruptedException
 import groovy.transform.Field
@@ -1310,6 +1310,8 @@ pipeline {
                     echo "env.gitlabTriggerPhrase is: ${env.gitlabTriggerPhrase}"
                     println testFilter
                     echo "Check the passed GitLab bot testFilter parameters."
+                    List test = NVDFQuery.queryJobEventsMatchingCommit("", "GH200-TensorRT-Post-Merge-1", "", "9688")
+                    exit(0)
                 }
             }
         }
