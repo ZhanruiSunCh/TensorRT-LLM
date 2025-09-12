@@ -1311,7 +1311,7 @@ pipeline {
                     println testFilter
                     echo "Check the passed GitLab bot testFilter parameters."
                     List test = NVDFQuery.queryJobEventsMatchingCommit("", "GH200-TensorRT-Post-Merge-1", "", "9688")
-                    exit(0)
+                    sh "cd aaa"
                 }
             }
         }
