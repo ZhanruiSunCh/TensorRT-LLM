@@ -304,9 +304,11 @@ def buildImage(config, imageKeyToTag)
         def BASE_IMAGE = sh(script: "cd ${LLM_ROOT} && grep '^ARG BASE_IMAGE=' docker/Dockerfile.multi | grep -o '=.*' | tr -d '=\"'", returnStdout: true).trim()
         def TRITON_IMAGE = sh(script: "cd ${LLM_ROOT} && grep '^ARG TRITON_IMAGE=' docker/Dockerfile.multi | grep -o '=.*' | tr -d '=\"'", returnStdout: true).trim()
         def TRITON_BASE_TAG = sh(script: "cd ${LLM_ROOT} && grep '^ARG TRITON_BASE_TAG=' docker/Dockerfile.multi | grep -o '=.*' | tr -d '=\"'", returnStdout: true).trim()
+        def BASE_TAG = "37481755-devel-${config.arch}"
 
         if (target == "rockylinux8") {
             BASE_IMAGE = sh(script: "cd ${LLM_ROOT} && grep '^jenkins-rockylinux8_%: BASE_IMAGE =' docker/Makefile | grep -o '=.*' | tr -d '=\"'", returnStdout: true).trim()
+            BASE_TAG = "13.0.1-devel-rockylinux8"
         }
 
         // Replace the base image and triton image with the internal mirror
@@ -320,7 +322,7 @@ def buildImage(config, imageKeyToTag)
                 trtllm_utils.llmExecStepWithRetry(this, script: """
                 cd ${LLM_ROOT} && make -C docker ${dependent.target}_${action} \
                 BASE_IMAGE=${BASE_IMAGE} \
-                BASE_TAG=37481755-devel-${config.arch} \
+                BASE_TAG=${BASE_TAG} \
                 TRITON_IMAGE=${TRITON_IMAGE} \
                 TORCH_INSTALL_TYPE=${torchInstallType} \
                 IMAGE_WITH_TAG=${dependentImageWithTag} \
@@ -350,7 +352,7 @@ def buildImage(config, imageKeyToTag)
             trtllm_utils.llmExecStepWithRetry(this, script: """
             cd ${LLM_ROOT} && make -C docker ${target}_${action} \
             BASE_IMAGE=${BASE_IMAGE} \
-            BASE_TAG=37481755-devel-${config.arch} \
+            BASE_TAG=${BASE_TAG} \
             TRITON_IMAGE=${TRITON_IMAGE} \
             TORCH_INSTALL_TYPE=${torchInstallType} \
             IMAGE_WITH_TAG=${imageWithTag} \
