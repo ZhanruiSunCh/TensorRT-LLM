@@ -320,6 +320,7 @@ def buildImage(config, imageKeyToTag)
                 trtllm_utils.llmExecStepWithRetry(this, script: """
                 cd ${LLM_ROOT} && make -C docker ${dependent.target}_${action} \
                 BASE_IMAGE=${BASE_IMAGE} \
+                BASE_TAG=37481755-devel-${config.arch} \
                 TRITON_IMAGE=${TRITON_IMAGE} \
                 TORCH_INSTALL_TYPE=${torchInstallType} \
                 IMAGE_WITH_TAG=${dependentImageWithTag} \
@@ -349,6 +350,7 @@ def buildImage(config, imageKeyToTag)
             trtllm_utils.llmExecStepWithRetry(this, script: """
             cd ${LLM_ROOT} && make -C docker ${target}_${action} \
             BASE_IMAGE=${BASE_IMAGE} \
+            BASE_TAG=37481755-devel-${config.arch} \
             TRITON_IMAGE=${TRITON_IMAGE} \
             TORCH_INSTALL_TYPE=${torchInstallType} \
             IMAGE_WITH_TAG=${imageWithTag} \
