@@ -14,7 +14,7 @@
 
    ```bash
    # By default, PyTorch CUDA 12.8 package is installed. Install PyTorch CUDA 13.0 package to align with the CUDA version used for building TensorRT LLM wheels.
-   pip3 install torch==2.9.0 torchvision --index-url https://download.pytorch.org/whl/cu130
+   pip3 install torch==2.9.1 torchvision --index-url https://download.pytorch.org/whl/cu130
 
    sudo apt-get -y install libopenmpi-dev
    
@@ -62,7 +62,7 @@ There are some known limitations when you pip install pre-built TensorRT LLM whe
 
 2. Prevent `pip` from replacing existing PyTorch installation
 
-   On certain systems, particularly Ubuntu 22.04, users installing TensorRT LLM would find that their existing, CUDA 13.0 compatible PyTorch installation (e.g., `torch==2.9.0+cu130`) was being uninstalled by `pip`. It was then replaced by a CUDA 12.8 version (`torch==2.9.0`), causing the TensorRT LLM installation to be unusable and leading to runtime errors.
+   On certain systems, particularly Ubuntu 22.04, users installing TensorRT LLM would find that their existing, CUDA 13.0 compatible PyTorch installation (e.g., `torch==2.9.1+cu130`) was being uninstalled by `pip`. It was then replaced by a CUDA 12.8 version (`torch==2.9.1`), causing the TensorRT LLM installation to be unusable and leading to runtime errors.
 
    The solution is to create a `pip` constraints file, locking `torch` to the currently installed version. Here is an example of how this can be done manually:
 
