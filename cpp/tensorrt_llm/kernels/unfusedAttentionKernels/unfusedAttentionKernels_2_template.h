@@ -18,6 +18,7 @@
 // Separate from unfusedAttentionKernel to accelerate compiling.
 
 #include "tensorrt_llm/common/assert.h"
+#include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/common/cudaTypeUtils.cuh"
 #include "tensorrt_llm/common/cudaUtils.h"
 #include "tensorrt_llm/common/envUtils.h"
@@ -30,8 +31,8 @@
 
 using namespace tensorrt_llm::common;
 
-namespace tensorrt_llm
-{
+TRTLLM_NAMESPACE_BEGIN
+
 namespace kernels
 {
 
@@ -300,21 +301,28 @@ inline __device__ void apply_rotary_embedding_gptj(VecType& q, VecType& k, float
     }
 }
 
-template <typename T>
+template <typename T, int VECS_PER_HEAD>
 inline __device__ void quantizeAndWriteFP4KVCache(uint8_t* kBlockScales, uint8_t* vBlockScales, uint32_t* kDst,
     uint32_t* vDst, float kSecondLevelSF, float vSecondLevelSF, int inBlockIdx, PackedVec<T>& kPacked,
     PackedVec<T>& vPacked)
 {
     uint8_t* kSfOut = nullptr;
     uint8_t* vSfOut = nullptr;
+    // WARNING: 8 elements per thread is assumed.
     // Two threads are involved in the reduction for block scales inside
     // cvt_warp_fp16_to_fp4, but only one thread needs to write out the
     // final answer.
+    constexpr int NUM_SFS_PER_HEAD = VECS_PER_HEAD / 2;
     if (inBlockIdx % 2 == 0)
     {
         auto blockScaleIdxDst = inBlockIdx / 2;
         kSfOut = kBlockScales + blockScaleIdxDst;
-        vSfOut = vBlockScales + blockScaleIdxDst;
+        // A interleaved layout (num_tokens / 4, num_sfs_per_head, 4) is used for nvfp4 kv cache in order to achieve
+        // better performance. This is only used by trtllm-gen kernels.
+        auto tokenIdxV = blockScaleIdxDst / NUM_SFS_PER_HEAD;
+        auto headDimIdxV = blockScaleIdxDst % NUM_SFS_PER_HEAD;
+        auto blockScaleIdxDstV = (tokenIdxV / 4) * 4 * NUM_SFS_PER_HEAD + headDimIdxV * 4 + (tokenIdxV % 4);
+        vSfOut = vBlockScales + blockScaleIdxDstV;
     }
 
     // Despite the name of cvt_warp_fp16_to_fp4, it is used by
@@ -376,6 +384,8 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
 #endif
     constexpr bool ENABLE_8BITS_CACHE = sizeof(TCache) == 1 && !ENABLE_4BITS_CACHE;
     int const sizePerHeadDivX = params.size_per_head / VEC_SIZE;
+    // This is only used by nvfp4 kv cache where Dh_MAX is same as head size (others are not supported yet).
+    constexpr int VECS_PER_HEAD = Dh_MAX / VEC_SIZE;
     using TDst = TCache;
 
     // Variable sequence length.
@@ -416,19 +426,26 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
             int const token_idx_in_seq = past_seq_len + local_token_idx;
             bool const valid_token = token_idx_in_seq < cache_seq_len;
 
-            // NOTE: only spec decoding needs the position offsets.
-            // In the generation phase, we assume all sequences should have the same input length.
-            int const rotary_position
-                = (params.spec_decoding_position_offsets != nullptr ? (
-                       params.spec_decoding_position_offsets[local_token_idx + batch_idx * params.max_input_seq_len]
-                       + past_seq_len)
-                                                                    : token_idx_in_seq)
-                + (params.mrope_position_deltas != nullptr ? params.mrope_position_deltas[batch_idx] : 0);
-
             if (!valid_token)
             {
                 continue;
             }
+
+            // NOTE: only spec decoding needs the position offsets.
+            // In the generation phase, we assume all sequences should have the same input length.
+            // Helix parallelism: use helix_position_offsets if available (absolute position).
+            int const rotary_position
+                = (params.helix_position_offsets != nullptr ? params.helix_position_offsets[global_token_idx]
+                          : params.spec_decoding_position_offsets != nullptr
+                          ? (params.spec_decoding_position_offsets[local_token_idx
+                                 + batch_idx * params.max_input_seq_len]
+                              + past_seq_len)
+                          : token_idx_in_seq)
+                + (params.mrope_position_deltas != nullptr ? params.mrope_position_deltas[batch_idx] : 0);
+
+            // Helix parallelism: determine if this rank is inactive for this request.
+            bool const helix_inactive
+                = params.helix_is_inactive_rank != nullptr && params.helix_is_inactive_rank[batch_idx];
 
             // Is the token and head dim maksed.
             bool const valid_head_dim_idx = head_dim_idx < params.size_per_head;
@@ -559,7 +576,7 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
                 if constexpr (FP8_OUTPUT || ENABLE_8BITS_CACHE)
                 {
                     mmha::convert_from_float(
-                        &scaleOrigQuant, params.kvScaleOrigQuant ? params.kvScaleOrigQuant[0] : 1.0f);
+                        &scaleOrigQuant, params.qkv_scale_orig_quant ? params.qkv_scale_orig_quant[0] : 1.0f);
                 }
 
                 if constexpr (FP8_OUTPUT)
@@ -596,7 +613,7 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
                         }
                     }
 
-                    if (valid_kv_cache_pos)
+                    if (valid_kv_cache_pos && !helix_inactive)
                     {
                         if constexpr (ENABLE_8BITS_CACHE)
                         {
@@ -611,14 +628,13 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
                                 params.kv_cache_block_scales_buffer.getKBlockPtr(batch_idx, token_idx_in_kv_cache));
                             auto* vBlockScales = reinterpret_cast<uint8_t*>(
                                 params.kv_cache_block_scales_buffer.getVBlockPtr(batch_idx, token_idx_in_kv_cache));
-                            float kSecondLevelSF = params.kv_cache_scale_factors[0];
-                            float vSecondLevelSF = params.kv_cache_scale_factors[1];
-
+                            float kSecondLevelSF = params.qkv_scale_orig_quant[1];
+                            float vSecondLevelSF = params.qkv_scale_orig_quant[2];
                             auto& kPacked = reinterpret_cast<PackedVec<T>&>(k_to_cache);
                             auto& vPacked = reinterpret_cast<PackedVec<T>&>(v);
-                            quantizeAndWriteFP4KVCache<T>(kBlockScales, vBlockScales, reinterpret_cast<uint32_t*>(kDst),
-                                reinterpret_cast<uint32_t*>(vDst), kSecondLevelSF, vSecondLevelSF, inBlockIdx, kPacked,
-                                vPacked);
+                            quantizeAndWriteFP4KVCache<T, VECS_PER_HEAD>(kBlockScales, vBlockScales,
+                                reinterpret_cast<uint32_t*>(kDst), reinterpret_cast<uint32_t*>(vDst), kSecondLevelSF,
+                                vSecondLevelSF, inBlockIdx, kPacked, vPacked);
                         }
                         else
                         {
@@ -640,13 +656,24 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
             params.fmha_tile_counter[0] = 0u;
         }
         // Take the quantization scales into consideration.
-        float q_scale_quant_orig = params.q_scale_quant_orig ? params.q_scale_quant_orig[0] : 1.f;
-        float kv_scale_quant_orig = params.kv_scale_quant_orig ? params.kv_scale_quant_orig[0] : 1.f;
+        float q_scale_quant_orig, k_scale_quant_orig, v_scale_quant_orig;
+        if constexpr (ENABLE_4BITS_CACHE)
+        {
+            q_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+            k_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[1] : 1.f;
+            v_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[2] : 1.f;
+        }
+        else
+        {
+            q_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+            k_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+            v_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+        }
         float o_scale_orig_quant = params.o_scale_orig_quant ? params.o_scale_orig_quant[0] : 1.f;
         if (params.fmha_bmm1_scale)
         {
             // The scale after fmha bmm1.
-            params.fmha_bmm1_scale[0] = q_scale_quant_orig * kv_scale_quant_orig * params.fmha_host_bmm1_scale;
+            params.fmha_bmm1_scale[0] = q_scale_quant_orig * k_scale_quant_orig * params.fmha_host_bmm1_scale;
             // The scale prepared for log2 optimization.
             constexpr float kLog2e = 1.4426950408889634074f;
             params.fmha_bmm1_scale[1] = params.fmha_bmm1_scale[0] * kLog2e;
@@ -654,7 +681,7 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
         if (params.fmha_bmm2_scale)
         {
             // The scale after fmha bmm2.
-            params.fmha_bmm2_scale[0] = o_scale_orig_quant * kv_scale_quant_orig;
+            params.fmha_bmm2_scale[0] = o_scale_orig_quant * v_scale_quant_orig;
         }
     }
 }
@@ -759,7 +786,7 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
     // Head idx.
     int const head_idx = blockIdx.y;
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    asm volatile("griddepcontrol.wait;");
+    cudaGridDependencySynchronize();
 #endif
 
     // Variable sequence length.
@@ -824,10 +851,17 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
 
         // NOTE: only spec decoding needs the position offsets.
         // In the generation phase, we assume all sequences should have the same input length.
-        int const rotary_position = params.spec_decoding_position_offsets != nullptr
+        // Helix parallelism: use helix_position_offsets if available (absolute position).
+        int const rotary_position = params.helix_position_offsets != nullptr
+            ? params.helix_position_offsets[bounded_global_token_idx]
+            : params.spec_decoding_position_offsets != nullptr
             ? (params.spec_decoding_position_offsets[token_idx_in_seq + batch_idx * params.max_input_seq_len]
                 + cache_seq_len - actual_seq_len)
             : token_idx_in_kv_cache;
+
+        // Helix parallelism: determine if this rank is inactive for this request.
+        bool const helix_inactive
+            = params.helix_is_inactive_rank != nullptr && params.helix_is_inactive_rank[batch_idx];
 
         // head_num == kv_head_num:
         //   src QKV: [batch, time, 3, head_num, size_per_head]
@@ -951,7 +985,8 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
             [[maybe_unused]] TScale scaleOrigQuant;
             if constexpr (FP8_OUTPUT || ENABLE_8BITS_CACHE)
             {
-                mmha::convert_from_float(&scaleOrigQuant, params.kvScaleOrigQuant ? params.kvScaleOrigQuant[0] : 1.0f);
+                mmha::convert_from_float(
+                    &scaleOrigQuant, params.qkv_scale_orig_quant ? params.qkv_scale_orig_quant[0] : 1.0f);
             }
 
             if constexpr (FP8_OUTPUT)
@@ -988,7 +1023,7 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
                     }
                 }
 
-                if (valid_kv_cache_pos)
+                if (valid_kv_cache_pos && !helix_inactive)
                 {
                     if constexpr (ENABLE_8BITS_CACHE)
                     {
@@ -996,7 +1031,7 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
                         // Cast float scale to dst data type.
                         using TScale = typename mmha::kv_cache_scale_type_t<T, TCache>::Type;
                         TScale scaleOrigQuant;
-                        mmha::convert_from_float(&scaleOrigQuant, params.kvScaleOrigQuant[0]);
+                        mmha::convert_from_float(&scaleOrigQuant, params.qkv_scale_orig_quant[0]);
                         // Store 8bits kv cache.
                         mmha::store_8bits_vec(kDst, k, inBlockIdx, scaleOrigQuant);
                         mmha::store_8bits_vec(vDst, v, inBlockIdx, scaleOrigQuant);
@@ -1007,14 +1042,13 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
                             params.kv_cache_block_scales_buffer.getKBlockPtr(batch_idx, token_idx_in_kv_cache));
                         auto* vBlockScales = reinterpret_cast<uint8_t*>(
                             params.kv_cache_block_scales_buffer.getVBlockPtr(batch_idx, token_idx_in_kv_cache));
-                        float kSecondLevelSF = params.kv_cache_scale_factors[0];
-                        float vSecondLevelSF = params.kv_cache_scale_factors[1];
-
+                        float kSecondLevelSF = params.qkv_scale_orig_quant[1];
+                        float vSecondLevelSF = params.qkv_scale_orig_quant[2];
                         auto& kPacked = reinterpret_cast<PackedVec<T>&>(k);
                         auto& vPacked = reinterpret_cast<PackedVec<T>&>(v);
-                        quantizeAndWriteFP4KVCache<T>(kBlockScales, vBlockScales, reinterpret_cast<uint32_t*>(kDst),
-                            reinterpret_cast<uint32_t*>(vDst), kSecondLevelSF, vSecondLevelSF, inBlockIdx, kPacked,
-                            vPacked);
+                        quantizeAndWriteFP4KVCache<T, VECS_PER_HEAD>(kBlockScales, vBlockScales,
+                            reinterpret_cast<uint32_t*>(kDst), reinterpret_cast<uint32_t*>(vDst), kSecondLevelSF,
+                            vSecondLevelSF, inBlockIdx, kPacked, vPacked);
                     }
                     else
                     {
@@ -1035,13 +1069,24 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
             params.fmha_tile_counter[0] = 0u;
         }
         // Take the quantization scales into consideration.
-        float q_scale_quant_orig = params.q_scale_quant_orig ? params.q_scale_quant_orig[0] : 1.f;
-        float kv_scale_quant_orig = params.kv_scale_quant_orig ? params.kv_scale_quant_orig[0] : 1.f;
+        float q_scale_quant_orig, k_scale_quant_orig, v_scale_quant_orig;
+        if constexpr (ENABLE_4BITS_CACHE)
+        {
+            q_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+            k_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[1] : 1.f;
+            v_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[2] : 1.f;
+        }
+        else
+        {
+            q_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+            k_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+            v_scale_quant_orig = params.qkv_scale_quant_orig ? params.qkv_scale_quant_orig[0] : 1.f;
+        }
         float o_scale_orig_quant = params.o_scale_orig_quant ? params.o_scale_orig_quant[0] : 1.f;
         if (params.fmha_bmm1_scale)
         {
             // The scale after fmha bmm1.
-            params.fmha_bmm1_scale[0] = q_scale_quant_orig * kv_scale_quant_orig * params.fmha_host_bmm1_scale;
+            params.fmha_bmm1_scale[0] = q_scale_quant_orig * k_scale_quant_orig * params.fmha_host_bmm1_scale;
             // The scale prepared for log2 optimization.
             constexpr float kLog2e = 1.4426950408889634074f;
             params.fmha_bmm1_scale[1] = params.fmha_bmm1_scale[0] * kLog2e;
@@ -1049,11 +1094,11 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
         if (params.fmha_bmm2_scale)
         {
             // The scale after fmha bmm2.
-            params.fmha_bmm2_scale[0] = o_scale_orig_quant * kv_scale_quant_orig;
+            params.fmha_bmm2_scale[0] = o_scale_orig_quant * v_scale_quant_orig;
         }
     }
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-    asm volatile("griddepcontrol.launch_dependents;");
+    cudaTriggerProgrammaticLaunchCompletion();
 #endif
 }
 
@@ -1378,7 +1423,8 @@ __global__ void updateKVCacheForCrossAttention(QKVPreprocessingParams<T, KVCache
     [[maybe_unused]] TScale scale_orig_quant;
     if constexpr (sizeof(TCache) == 1 || FP8_OUTPUT)
     {
-        mmha::convert_from_float(&scale_orig_quant, params.kvScaleOrigQuant ? params.kvScaleOrigQuant[0] : 1.0f);
+        mmha::convert_from_float(
+            &scale_orig_quant, params.qkv_scale_orig_quant ? params.qkv_scale_orig_quant[0] : 1.0f);
     }
 
     // For loop in the sequence length dimension.
@@ -1506,6 +1552,15 @@ void invokeApplyBiasRopeUpdateKVCacheDispatch(QKVPreprocessingParams<T, KVCacheB
     // Use specialized kernels for different heads (better balance of work).
     TLLM_CHECK_WITH_INFO(params.size_per_head % 8 == 0, "Head size needs to be multiple of 8!");
     TLLM_CHECK_WITH_INFO(params.rotary_embedding_dim % 8 == 0, "Rotary embedding dimension needs to be multiple of 8!");
+
+// NVFP4 kv cache requires head size to be power of 2.
+#ifdef ENABLE_FP4
+    if (std::is_same_v<TCache, __nv_fp4_e2m1>)
+    {
+        TLLM_CHECK_WITH_INFO((params.size_per_head & (params.size_per_head - 1)) == 0,
+            "Head size needs to be power of 2 for nvfp4 kv cache.");
+    }
+#endif
 
     // TODO: this should be extended to support quantized FP4 outputs as well.
     // For now, we will assume that the attention kernel reads directly from the KV cache
@@ -1687,6 +1742,130 @@ void invokeUpdateCyclicKvCacheAfterFmha(QKVPreprocessingParams<T, KVCacheBuffer>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <typename T, typename TCache, int BLOCK_SIZE, int Dh, typename KVCacheBuffer>
+__global__ __launch_bounds__(BLOCK_SIZE) void updateSparseKvCacheAfterFmha(
+    QKVPreprocessingParams<T, KVCacheBuffer> params)
+{
+    // The number of 16B vectors per head size in the kv cache.
+    constexpr int VECS_PER_HEAD = Dh * sizeof(TCache) / 16;
+    static_assert(BLOCK_SIZE % VECS_PER_HEAD == 0, "Kernel block should be able to handle entire heads.");
+
+    int const batch_idx = blockIdx.z;
+    int const kv_head_idx = blockIdx.y;
+
+    int const total_num_sparse_kv_tokens = params.sparse_kv_offsets[params.batch_size];
+
+    int const sparse_start_idx = params.sparse_kv_offsets[batch_idx];
+    int const sparse_end_idx = params.sparse_kv_offsets[batch_idx + 1];
+    int const num_sparse_tokens = sparse_end_idx - sparse_start_idx;
+
+    int const tokens_per_block = blockDim.y;
+    int const vecs_per_block = blockDim.x;
+
+    extern __shared__ uint4 smem[];
+    uint4* k_smem = smem;
+    uint4* v_smem = k_smem + tokens_per_block * VECS_PER_HEAD;
+
+    for (int token_block_offset = 0; token_block_offset < num_sparse_tokens; token_block_offset += tokens_per_block)
+    {
+        int const sparse_token_offset = token_block_offset + threadIdx.y;
+
+        if (sparse_token_offset < num_sparse_tokens)
+        {
+            int const global_sparse_idx = sparse_start_idx + sparse_token_offset;
+            int const sparse_idx_offset = kv_head_idx * total_num_sparse_kv_tokens + global_sparse_idx;
+
+            int const src_token_idx = params.sparse_kv_indices[sparse_idx_offset];
+
+            void* src_k_ptr = params.kv_cache_buffer.getKBlockPtr(batch_idx, src_token_idx);
+            void* src_v_ptr = params.kv_cache_buffer.getVBlockPtr(batch_idx, src_token_idx);
+            auto const src_k_block_ptr = reinterpret_cast<uint4*>(src_k_ptr);
+            auto const src_v_block_ptr = reinterpret_cast<uint4*>(src_v_ptr);
+
+            for (int head_vec_idx = threadIdx.x; head_vec_idx < VECS_PER_HEAD; head_vec_idx += vecs_per_block)
+            {
+                auto const src_k_vec_idx
+                    = params.kv_cache_buffer.getKVLocalIdx(src_token_idx, kv_head_idx, VECS_PER_HEAD, head_vec_idx);
+                auto const src_v_vec_idx
+                    = params.kv_cache_buffer.getKVLocalIdx(src_token_idx, kv_head_idx, VECS_PER_HEAD, head_vec_idx);
+
+                k_smem[threadIdx.y * VECS_PER_HEAD + head_vec_idx] = src_k_block_ptr[src_k_vec_idx];
+                v_smem[threadIdx.y * VECS_PER_HEAD + head_vec_idx] = src_v_block_ptr[src_v_vec_idx];
+            }
+        }
+        __syncthreads();
+
+        if (sparse_token_offset < num_sparse_tokens)
+        {
+            int const global_sparse_idx = sparse_start_idx + sparse_token_offset;
+            int const sparse_idx_offset = kv_head_idx * total_num_sparse_kv_tokens + global_sparse_idx;
+
+            int const src_token_idx = params.sparse_kv_indices[sparse_idx_offset];
+            int const dst_token_idx = sparse_token_offset;
+
+            if (src_token_idx != dst_token_idx)
+            {
+                void* dst_k_ptr = params.kv_cache_buffer.getKBlockPtr(batch_idx, dst_token_idx);
+                void* dst_v_ptr = params.kv_cache_buffer.getVBlockPtr(batch_idx, dst_token_idx);
+                auto const dst_k_block_ptr = reinterpret_cast<uint4*>(dst_k_ptr);
+                auto const dst_v_block_ptr = reinterpret_cast<uint4*>(dst_v_ptr);
+
+                for (int head_vec_idx = threadIdx.x; head_vec_idx < VECS_PER_HEAD; head_vec_idx += vecs_per_block)
+                {
+                    auto const dst_k_vec_idx
+                        = params.kv_cache_buffer.getKVLocalIdx(dst_token_idx, kv_head_idx, VECS_PER_HEAD, head_vec_idx);
+                    auto const dst_v_vec_idx
+                        = params.kv_cache_buffer.getKVLocalIdx(dst_token_idx, kv_head_idx, VECS_PER_HEAD, head_vec_idx);
+                    dst_k_block_ptr[dst_k_vec_idx] = k_smem[threadIdx.y * VECS_PER_HEAD + head_vec_idx];
+                    dst_v_block_ptr[dst_v_vec_idx] = v_smem[threadIdx.y * VECS_PER_HEAD + head_vec_idx];
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <int Dh, typename T, typename TCache, typename KVCacheBuffer>
+void kernelSparseDispatchHeadSize(QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream)
+{
+    constexpr int VECS_PER_HEAD = Dh * sizeof(TCache) / 16;
+    constexpr int BLOCK_SIZE = 1024;
+    dim3 block(32, 32); // x: head vectors, y: tokens
+
+    int smem_size = 2 * block.y * VECS_PER_HEAD * sizeof(uint4);
+
+    // grid.x is always 1 to avoid data races
+    dim3 grid(1, params.kv_head_num, params.batch_size);
+
+    updateSparseKvCacheAfterFmha<T, TCache, BLOCK_SIZE, Dh, KVCacheBuffer><<<grid, block, smem_size, stream>>>(params);
+}
+
+template <typename T, typename TCache, typename KVCacheBuffer>
+void invokeUpdateSparseKvCacheAfterFmha(QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream)
+{
+    if (params.sparse_kv_indices == nullptr)
+    {
+        return;
+    }
+
+    switch (params.size_per_head)
+    {
+    case 16: kernelSparseDispatchHeadSize<16, T, TCache, KVCacheBuffer>(params, stream); break;
+    case 32: kernelSparseDispatchHeadSize<32, T, TCache, KVCacheBuffer>(params, stream); break;
+    case 64: kernelSparseDispatchHeadSize<64, T, TCache, KVCacheBuffer>(params, stream); break;
+    case 128: kernelSparseDispatchHeadSize<128, T, TCache, KVCacheBuffer>(params, stream); break;
+    case 256: kernelSparseDispatchHeadSize<256, T, TCache, KVCacheBuffer>(params, stream); break;
+    default:
+        TLLM_CHECK_WITH_INFO(
+            false, "updateSparseKvCacheAfterFmha kernel doesn't support head size = %d", params.size_per_head);
+        break;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #define INSTANTIATE_ATTENTION_INPUT_PROCESSING(T, TCache, KVCacheBuffer)                                               \
     template void invokeApplyBiasRopeUpdateKVCacheDispatch<T, TCache, KVCacheBuffer>(                                  \
         QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream);
@@ -1695,9 +1874,11 @@ void invokeUpdateCyclicKvCacheAfterFmha(QKVPreprocessingParams<T, KVCacheBuffer>
     template void invokeApplyBiasRopeUpdateKVCacheDispatch<T, TCache, KVCacheBuffer>(                                  \
         QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream);                                         \
     template void invokeUpdateCyclicKvCacheAfterFmha<T, TCache, KVCacheBuffer>(                                        \
-        QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream);
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
+        QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream);                                         \
+    template void invokeUpdateSparseKvCacheAfterFmha<T, TCache, KVCacheBuffer>(                                        \
+        QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream);                                         \
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace kernels
-} // namespace tensorrt_llm
+
+TRTLLM_NAMESPACE_END

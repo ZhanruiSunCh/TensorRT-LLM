@@ -26,6 +26,15 @@ In MoE, the weights are pre-quantized to mxfp4. The activation can be in either 
 
 For best performance, use the `TRITON` moe_backend on Hopper for both latency and throughput cases. Use `CUTLASS` for throughput cases and `TRTLLM` for latency cases on Blackwell.
 
+## KV Cache Support Matrix
+
+|   device  | bf16 kv cache dtype | fp8 kv cache dtype |
+|:---------:|:-------------------:|--------------------|
+|   Hopper  | yes                 | no                 |
+| Blackwell | yes                 | yes                |
+
+On Blackwell GPUs, support for FP8 KV cache is available, allowing the key-value cache to be stored in FP8 format. This reduces memory usage and bandwidth requirements, which can lead to higher throughput and improved overall performance, especially for large batch sizes or long sequence generation.
+
 ## Harmony Examples
 
 ### Function Calling
@@ -98,33 +107,10 @@ Once again, the function call works successfully, this time using a different fu
 
 ## Using OpenAI Triton Kernels for MoE
 
-OpenAI ships a set of Triton kernels optimized for its MoE models. TensorRT-LLM can leverage these kernels; enable them with the steps below:
 
-1. **Build and install Triton** (tested with the commit below):
+OpenAI ships a set of Triton kernels optimized for its MoE models.
 
-```bash
-git clone https://github.com/triton-lang/triton.git
-cd triton
-# Specific commit verified with TensorRT-LLM
-git checkout f3067cd3bd0c29065fa4ecdb724b6f29cbabea5f
-pip install -r python/requirements.txt          # build-time dependencies
-pip install wheel build
-python3 setup.py bdist_wheel
-pip install ./dist/*.whl
-```
-
-2. **Expose the Triton kernels to TensorRT-LLM**
-   The kernels are not packaged in the wheel, so set the environment variable `TRITON_ROOT` to your Triton clone:
-
-```bash
-export TRITON_ROOT=/local/user/triton
-# TensorRT-LLM expects the kernels at:
-#   $TRITON_ROOT/python/triton_kernels
-```
-
-3. **Select Triton as the MoE backend**
-
-• **trtllm-serve** (or other similar commands) — add this snippet to the YAML file passed via `--extra_llm_api_options`:
+To use the Triton MoE backend with **trtllm-serve** (or other similar commands), add this snippet to the YAML file passed via `--config`:
 
 ```yaml
 moe_config:

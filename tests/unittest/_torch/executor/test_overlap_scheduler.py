@@ -7,6 +7,7 @@ from utils.llm_data import llm_models_root
 from tensorrt_llm import LLM, SamplingParams
 from tensorrt_llm.llmapi import CudaGraphConfig
 from tensorrt_llm.llmapi import KvCacheConfig as TRT_KvCacheConfig
+from tensorrt_llm.llmapi.llm_args import SchedulerConfig
 
 
 # A test case of mmlu_llama from lm_eval
@@ -21,8 +22,13 @@ def model_path():
     return llm_models_root() / "llama-models-v2/TinyLlama-1.1B-Chat-v1.0"
 
 
-def create_llm(model_dir, disable_overlap_scheduler, sampler_type):
+def create_llm(model_dir,
+               disable_overlap_scheduler,
+               sampler_type,
+               scheduler_config=None):
     """Create LLM with specific overlap scheduler setting"""
+    if scheduler_config is None:
+        scheduler_config = SchedulerConfig()
     pytorch_config = dict(disable_overlap_scheduler=disable_overlap_scheduler,
                           sampler_type=sampler_type)
 
@@ -37,13 +43,21 @@ def create_llm(model_dir, disable_overlap_scheduler, sampler_type):
         **pytorch_config,
         kv_cache_config=trt_kv_cache_config,
         max_num_tokens=
-        128  # Only one request longer than max_num_tokens is required to test chunked prefill
+        128,  # Only one request longer than max_num_tokens is required to test chunked prefill
+        scheduler_config=scheduler_config,
     )
 
 
 @pytest.mark.parametrize("sampler_type", ["TorchSampler", "TRTLLMSampler"])
+@pytest.mark.parametrize("use_python_scheduler", [False, True],
+                         ids=["cpp_scheduler", "python_scheduler"])
 @pytest.mark.high_cuda_memory
-def test_overlap_scheduler_consistency(model_path, test_case, sampler_type):
+@pytest.mark.mpi_ray_parity
+def test_overlap_scheduler_consistency(model_path, test_case, sampler_type,
+                                       use_python_scheduler):
+    scheduler_config = SchedulerConfig(
+        use_python_scheduler=use_python_scheduler)
+
     # Test configuration
     prompts = test_case["prompts"]
     max_new_tokens = test_case["max_new_tokens"]
@@ -59,28 +73,28 @@ def test_overlap_scheduler_consistency(model_path, test_case, sampler_type):
                                      use_beam_search=True)
 
     # Test with overlap scheduler enabled
-    llm = create_llm(model_path,
-                     disable_overlap_scheduler=False,
-                     sampler_type=sampler_type)
-    outputs_with_overlap = llm.generate(prompts,
-                                        sampling_params=sampling_config,
-                                        use_tqdm=True)
-    texts_with_overlap = [[
-        completion.text for completion in request_output.outputs
-    ] for request_output in outputs_with_overlap]
-    llm.shutdown()
+    with create_llm(model_path,
+                    disable_overlap_scheduler=False,
+                    sampler_type=sampler_type,
+                    scheduler_config=scheduler_config) as llm:
+        outputs_with_overlap = llm.generate(prompts,
+                                            sampling_params=sampling_config,
+                                            use_tqdm=True)
+        texts_with_overlap = [[
+            completion.text for completion in request_output.outputs
+        ] for request_output in outputs_with_overlap]
 
     # Test with overlap scheduler disabled
-    llm = create_llm(model_path,
-                     disable_overlap_scheduler=True,
-                     sampler_type=sampler_type)
-    outputs_without_overlap = llm.generate(prompts,
-                                           sampling_params=sampling_config,
-                                           use_tqdm=True)
-    texts_without_overlap = [[
-        completion.text for completion in request_output.outputs
-    ] for request_output in outputs_without_overlap]
-    llm.shutdown()
+    with create_llm(model_path,
+                    disable_overlap_scheduler=True,
+                    sampler_type=sampler_type,
+                    scheduler_config=scheduler_config) as llm:
+        outputs_without_overlap = llm.generate(prompts,
+                                               sampling_params=sampling_config,
+                                               use_tqdm=True)
+        texts_without_overlap = [[
+            completion.text for completion in request_output.outputs
+        ] for request_output in outputs_without_overlap]
 
     # Verify outputs are consistent
     for with_overlap, without_overlap in zip(texts_with_overlap,

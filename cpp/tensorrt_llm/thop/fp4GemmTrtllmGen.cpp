@@ -25,6 +25,8 @@
 
 #include <cstdint>
 
+TRTLLM_NAMESPACE_BEGIN
+
 namespace torch_ext
 {
 
@@ -40,7 +42,7 @@ void runGemm(at::Tensor& out, at::Tensor const& mat1, at::Tensor const& mat2, at
     auto eltType = tg::Dtype::E2m1;
 
     tensorrt_llm::kernels::TrtllmGenGemmRunnerOptions options
-        = {.eltType = eltType, .outputType = outDtype, .deepSeekFp8 = false};
+        = {.eltTypeA = eltType, .outputType = outDtype, .deepSeekFp8 = false};
 
     tensorrt_llm::kernels::TrtllmGenGemmRunner runner(options);
 
@@ -126,6 +128,8 @@ at::Tensor fp4_gemm_trtllmgen(at::Tensor const& mat1, at::Tensor const& mat2, at
 
 } // namespace torch_ext
 
+TRTLLM_NAMESPACE_END
+
 TORCH_LIBRARY_FRAGMENT(trtllm, m)
 {
     m.def(
@@ -136,5 +140,5 @@ TORCH_LIBRARY_FRAGMENT(trtllm, m)
 
 TORCH_LIBRARY_IMPL(trtllm, CUDA, m)
 {
-    m.impl("fp4_gemm_trtllmgen", &torch_ext::fp4_gemm_trtllmgen);
+    m.impl("fp4_gemm_trtllmgen", &tensorrt_llm::torch_ext::fp4_gemm_trtllmgen);
 }

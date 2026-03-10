@@ -494,11 +494,14 @@ class RandomDataset(BenchmarkDataset):
 
             # Filter out sequences that are too long or too short
             requests = []
-            for prompt, initial_prompt_len, cached_token_ids in zip(
-                    dataset, prompt_lengths, prompt_token_ids):
-                i = len(requests)
-                if i == num_requests:
-                    break
+            dataset_len = len(dataset)
+
+            for i in range(num_requests):
+                # Use modulo to cycle through the dataset when num_requests > dataset_len
+                dataset_idx = i % dataset_len
+                prompt = dataset[dataset_idx]
+                initial_prompt_len = prompt_lengths[dataset_idx]
+                cached_token_ids = prompt_token_ids[dataset_idx]
 
                 # Skip empty prompt
                 if initial_prompt_len == 0:
@@ -534,9 +537,6 @@ class RandomDataset(BenchmarkDataset):
                         prompt_len=total_input_len,
                         expected_output_len=int(output_lens[i]),
                     ))
-            assert len(requests) == num_requests, (
-                f"Only {len(requests)} requests sampled from sharegpt dataset, {num_requests} requests are needed"
-            )
         else:
             for i in range(num_requests):
                 inner_seq = ((offsets[i] + i + np.arange(input_lens[i])) %
@@ -686,7 +686,7 @@ class RandomImageDataset(BenchmarkDataset):
 
 class CustomDataset(BenchmarkDataset):
     """
-    TensorRT-LLM customized dataset implementation.
+    TensorRT LLM customized dataset implementation.
     It assumes the dataset to be consist of several lines of json, each line is a minimal OpenAI API format request.
     Example format of each sample on each line:
     {
@@ -728,6 +728,7 @@ class CustomDataset(BenchmarkDataset):
         # Collect all prompts and metadata
         prompts = []
         max_tokens_list = []
+        prompt_lengths = []
 
         for i, entry in enumerate(self.data):
             if len(prompts) >= num_requests:
@@ -736,10 +737,18 @@ class CustomDataset(BenchmarkDataset):
             max_tokens = entry["input"]["max_tokens"]
             prompts.append(prompt)
             max_tokens_list.append(max_tokens)
+            if "num_tokens" in entry["input"] and isinstance(
+                    entry["input"]["num_tokens"],
+                    int) and entry["input"]["num_tokens"] > 0:
+                prompt_lengths.append(entry["input"]["num_tokens"])
 
-        # Use batch tokenization utility
-        prompt_lengths, _ = batch_tokenize_prompts(
-            prompts, tokenizer, progress_name="custom dataset prompts")
+        if len(prompt_lengths) > 0 and len(prompt_lengths) == len(prompts):
+            print(
+                f"skipping batch tokenization because prompt_lengths are already available"
+            )
+        else:
+            prompt_lengths, _ = batch_tokenize_prompts(
+                prompts, tokenizer, progress_name="custom dataset prompts")
 
         # Create SampleRequest objects
         samples = []
@@ -1119,8 +1128,6 @@ class VisionArenaDataset(HuggingFaceDataset):
         enable_multimodal_chat: bool = False,
         **kwargs,
     ) -> list:
-        if enable_multimodal_chat:
-            raise NotImplementedError
 
         output_len = (output_len
                       if output_len is not None else self.DEFAULT_OUTPUT_LEN)
@@ -1130,12 +1137,12 @@ class VisionArenaDataset(HuggingFaceDataset):
         parser_fn = self.SUPPORTED_DATASET_PATHS.get(self.dataset_path)
         if parser_fn is None:
             raise ValueError(f"Unsupported dataset path: {self.dataset_path}")
-
+        sampled_requests = []
         for item in self.data:
             if len(prompts) >= num_requests:
                 break
             prompt = parser_fn(item)
-            mm_content = process_image(item["images"][0])
+            mm_content = [process_image(item["images"][0])]
             prompt_len = len(tokenizer(prompt).input_ids)
             if enable_multimodal_chat:
                 prompt = self.apply_multimodal_chat_transformation(

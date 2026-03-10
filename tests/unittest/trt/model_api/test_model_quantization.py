@@ -1,5 +1,6 @@
 import tempfile
 
+import pytest
 from transformers import AutoTokenizer
 from utils.llm_data import llm_models_root
 from utils.util import force_ampere, skip_no_modelopt, skip_pre_ada
@@ -20,6 +21,7 @@ batch_input_text = [
 ]
 
 
+@pytest.mark.skip(reason="https://nvbugs/5488280")
 @force_ampere
 @skip_no_modelopt
 def test_int4_awq_quantization():
@@ -29,7 +31,7 @@ def test_int4_awq_quantization():
     cnn_dailymail_path = str(llm_models_root() / "datasets/cnn_dailymail")
 
     checkpoint_dir = tempfile.TemporaryDirectory("llama-checkpoint").name
-    quant_config = QuantConfig(QuantAlgo.W4A16_AWQ)
+    quant_config = QuantConfig(quant_algo=QuantAlgo.W4A16_AWQ)
     LLaMAForCausalLM.quantize(hf_model_dir,
                               checkpoint_dir,
                               quant_config=quant_config,
@@ -63,6 +65,7 @@ def test_int4_awq_quantization():
             # TODO: TRTLLM-185, check the score when the test infra is ready, hard coded value is not stable, cause flaky tests in L0
 
 
+@pytest.mark.skip(reason="https://nvbugs/5488280")
 @skip_pre_ada
 @skip_no_modelopt
 def test_fp8_quantization():
@@ -71,7 +74,7 @@ def test_fp8_quantization():
     cnn_dailymail_path = str(llm_models_root() / "datasets/cnn_dailymail")
 
     checkpoint_dir = tempfile.TemporaryDirectory("llama-checkpoint").name
-    quant_config = QuantConfig(QuantAlgo.FP8)
+    quant_config = QuantConfig(quant_algo=QuantAlgo.FP8)
     LLaMAForCausalLM.quantize(hf_model_dir,
                               checkpoint_dir,
                               quant_config=quant_config,

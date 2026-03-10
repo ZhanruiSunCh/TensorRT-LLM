@@ -16,10 +16,13 @@
 
 #pragma once
 
+#include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/common/stringUtils.h"
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -35,8 +38,27 @@
 #define NEW_TLLM_EXCEPTION(...)                                                                                        \
     tensorrt_llm::common::TllmException(__FILE__, __LINE__, tensorrt_llm::common::fmtstr(__VA_ARGS__).c_str())
 
-namespace tensorrt_llm::common
+#define TLLM_REQUEST_EXCEPTION(requestID, errorCode, ...)                                                              \
+    tensorrt_llm::common::RequestSpecificException(                                                                    \
+        __FILE__, __LINE__, tensorrt_llm::common::fmtstr(__VA_ARGS__).c_str(), requestID, errorCode)
+
+TRTLLM_NAMESPACE_BEGIN
+
+namespace common
 {
+
+/// @brief Enumeration of different error codes for request-specific exceptions
+enum class RequestErrorCode : uint32_t
+{
+    // General errors (0-999)
+    kUNKNOWN_ERROR = 0,
+
+    // Network and communication errors (1000-1999)
+    kNETWORK_ERROR = 1000,
+};
+
+/// @brief Constant for unknown request ID
+static constexpr uint64_t kUNKNOWN_REQUEST_ID = std::numeric_limits<uint64_t>::max();
 
 class TllmException : public std::runtime_error
 {
@@ -58,7 +80,8 @@ private:
 
 [[noreturn]] inline void throwRuntimeError(char const* const file, int const line, char const* info)
 {
-    throw TllmException(file, line, fmtstr("[TensorRT-LLM][ERROR] Assertion failed: %s", info).c_str());
+    throw TllmException(
+        file, line, tensorrt_llm::common::fmtstr("[TensorRT-LLM][ERROR] Assertion failed: %s", info).c_str());
 }
 
 [[noreturn]] inline void throwRuntimeError(char const* const file, int const line, std::string const& info = "")
@@ -66,4 +89,23 @@ private:
     throw TllmException(file, line, fmtstr("[TensorRT-LLM][ERROR] Assertion failed: %s", info.c_str()).c_str());
 }
 
-} // namespace tensorrt_llm::common
+class RequestSpecificException : public std::runtime_error
+{
+public:
+    explicit RequestSpecificException(
+        std::string const& file, std::size_t line, char const* msg, uint64_t requestID, RequestErrorCode errorCode);
+
+    ~RequestSpecificException() noexcept override;
+
+    [[nodiscard]] uint64_t getRequestId() const noexcept;
+
+    [[nodiscard]] RequestErrorCode getErrorCode() const noexcept;
+
+private:
+    uint64_t mRequestID;
+    RequestErrorCode mErrorCode;
+};
+
+} // namespace common
+
+TRTLLM_NAMESPACE_END

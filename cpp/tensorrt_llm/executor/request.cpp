@@ -25,7 +25,6 @@
 
 namespace tensorrt_llm::executor
 {
-// 36 parameters
 Request::Request(VecTokens inputTokenIds, SizeType32 maxTokens, bool streaming, SamplingConfig const& samplingConfig,
     OutputConfig const& outputConfig, std::optional<SizeType32> const& endId, std::optional<SizeType32> const& padId,
     std::optional<std::vector<SizeType32>> positionIds, std::optional<std::list<VecTokens>> badWords,
@@ -41,7 +40,8 @@ Request::Request(VecTokens inputTokenIds, SizeType32 maxTokens, bool streaming, 
     std::optional<SizeType32> encoderOutputLength, std::optional<Tensor> crossAttentionMask,
     SizeType32 numReturnSequences, std::optional<EagleConfig> eagleConfig, std::optional<Tensor> skipCrossAttnBlocks,
     std::optional<GuidedDecodingParams> guidedDecodingParams, std::optional<SizeType32> languageAdapterUid,
-    std::optional<MillisecondsType> allottedTimeMs)
+    std::optional<MillisecondsType> allottedTimeMs, std::optional<CacheSaltIDType> cacheSaltID,
+    std::optional<IdType> disaggRequestId)
     : mImpl(std::make_unique<Impl>(std::move(inputTokenIds), maxTokens, streaming, samplingConfig, outputConfig, endId,
         padId, std::move(positionIds), std::move(badWords), std::move(stopWords), std::move(embeddingBias),
         std::move(externalDraftTokensConfig), std::move(pTuningConfig), std::move(multimodalInput),
@@ -50,7 +50,7 @@ Request::Request(VecTokens inputTokenIds, SizeType32 maxTokens, bool streaming, 
         std::move(encoderInputTokenIds), clientId, returnAllGeneratedTokens, priority, type,
         std::move(contextPhaseParams), std::move(encoderInputFeatures), encoderOutputLength, crossAttentionMask,
         numReturnSequences, eagleConfig, skipCrossAttnBlocks, std::move(guidedDecodingParams), languageAdapterUid,
-        allottedTimeMs))
+        allottedTimeMs, cacheSaltID, disaggRequestId))
 {
 }
 
@@ -249,6 +249,16 @@ std::optional<SizeType32> Request::getLanguageAdapterUid() const
     return mImpl->getLanguageAdapterUid();
 }
 
+std::optional<CacheSaltIDType> Request::getCacheSaltID() const
+{
+    return mImpl->getCacheSaltID();
+}
+
+std::optional<IdType> Request::getDisaggRequestId() const
+{
+    return mImpl->getDisaggRequestId();
+}
+
 void Request::setStreaming(bool streaming)
 {
     mImpl->setStreaming(streaming);
@@ -306,12 +316,12 @@ void Request::setPromptTuningConfig(PromptTuningConfig const& pTuningConfig)
 
 void Request::setMultimodalEmbedding(Tensor const& multimodalEmbedding)
 {
-    return mImpl->setMultimodalEmbedding(multimodalEmbedding);
+    mImpl->setMultimodalEmbedding(multimodalEmbedding);
 }
 
 void Request::setMultimodalInput(MultimodalInput const& multimodalInput)
 {
-    return mImpl->setMultimodalInput(multimodalInput);
+    mImpl->setMultimodalInput(multimodalInput);
 }
 
 void Request::setMropeConfig(MropeConfig const& mRopeConfig)
@@ -396,7 +406,7 @@ void Request::setEagleConfig(std::optional<EagleConfig> const& eagleConfig)
 
 void Request::setSkipCrossAttnBlocks(Tensor skipCrossAttnBlocks)
 {
-    return mImpl->setSkipCrossAttnBlocks(skipCrossAttnBlocks);
+    mImpl->setSkipCrossAttnBlocks(skipCrossAttnBlocks);
 }
 
 void Request::setGuidedDecodingParams(GuidedDecodingParams const& guidedDecodingParams)
@@ -406,11 +416,21 @@ void Request::setGuidedDecodingParams(GuidedDecodingParams const& guidedDecoding
 
 void Request::setAllottedTimeMs(MillisecondsType allottedTimeMs)
 {
-    return mImpl->setAllottedTimeMs(allottedTimeMs);
+    mImpl->setAllottedTimeMs(allottedTimeMs);
 }
 
 void Request::setLanguageAdapterUid(SizeType32 languageAdapterUid)
 {
-    return mImpl->setLanguageAdapterUid(languageAdapterUid);
+    mImpl->setLanguageAdapterUid(languageAdapterUid);
+}
+
+void Request::setCacheSaltID(CacheSaltIDType cacheSaltID)
+{
+    mImpl->setCacheSaltID(cacheSaltID);
+}
+
+void Request::setDisaggRequestId(IdType disaggRequestId)
+{
+    mImpl->setDisaggRequestId(disaggRequestId);
 }
 } // namespace tensorrt_llm::executor

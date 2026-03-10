@@ -51,6 +51,11 @@ class TritonDecoder(Decoder):
         self.draft_llm_model_name = draft_llm_model_name
         self.multimodal_encoders_name = multimodal_encoders_name
 
+        # `exclude_input_in_output` configuration for target and draft model.
+        # Don't directly access this variable from outside of this instance.
+        self._exclude_input_in_output_for_target = None
+        self._exclude_input_in_output_for_draft = None
+
         self._preproc_outputs = [
             "INPUT_ID", "DECODER_INPUT_ID", "REQUEST_INPUT_LEN",
             "REQUEST_DECODER_INPUT_LEN", "BAD_WORDS_IDS", "STOP_WORDS_IDS",
@@ -72,7 +77,8 @@ class TritonDecoder(Decoder):
             "kv_cache_reused_blocks", "kv_cache_alloc_total_blocks",
             "arrival_time_ns", "first_scheduled_time_ns", "first_token_time_ns",
             "last_token_time_ns", "acceptance_rate",
-            "total_accepted_draft_tokens", "total_draft_tokens"
+            "total_accepted_draft_tokens", "total_draft_tokens",
+            "num_input_tokens", "num_output_tokens"
         ]
 
         self._postproc_outputs = [
@@ -92,7 +98,8 @@ class TritonDecoder(Decoder):
             "embedding_bias_weights", "num_draft_tokens", "use_draft_logits",
             "lora_task_id", "lora_weights", "lora_config",
             "exclude_input_in_output", "return_perf_metrics",
-            "guided_decoding_guide_type", "guided_decoding_guide"
+            "guided_decoding_guide_type", "guided_decoding_guide",
+            "return_num_input_tokens", "return_num_output_tokens"
         ]
 
         self.__undo_reshape_whitelist = {
@@ -102,7 +109,9 @@ class TritonDecoder(Decoder):
             "return_context_logits", "return_generation_logits", "beam_width",
             "stream", "prompt_vocab_size", "num_draft_tokens",
             "use_draft_logits", "exclude_input_in_output",
-            "return_perf_metrics", "lora_weights", "lora_config", "lora_task_id"
+            "return_perf_metrics", "lora_weights", "lora_config",
+            "lora_task_id", "return_num_input_tokens",
+            "return_num_output_tokens"
         }
 
     def _exec_triton_request(self, request):
@@ -136,7 +145,9 @@ class TritonDecoder(Decoder):
             "last_token_time_ns": "last_token_time_ns",
             "acceptance_rate": "acceptance_rate",
             "total_accepted_draft_tokens": "total_accepted_draft_tokens",
-            "total_draft_tokens": "total_draft_tokens"
+            "total_draft_tokens": "total_draft_tokens",
+            "num_input_tokens": "num_input_tokens",
+            "num_output_tokens": "num_output_tokens"
         }
         tensors = self.create_triton_tensors(response, name_map)
         return pb_utils.InferenceResponse(output_tensors=tensors)
@@ -459,7 +470,9 @@ class TritonDecoder(Decoder):
             "exclude_input_in_output": "exclude_input_in_output",
             "return_perf_metrics": "return_perf_metrics",
             "guided_decoding_guide_type": "guided_decoding_guide_type",
-            "guided_decoding_guide": "guided_decoding_guide"
+            "guided_decoding_guide": "guided_decoding_guide",
+            "return_num_input_tokens": "return_num_input_tokens",
+            "return_num_output_tokens": "return_num_output_tokens"
         }
         batch_size = request.text_input.shape[0]
         tensors = self.create_triton_tensors(request, name_map)
@@ -546,7 +559,9 @@ class TritonDecoder(Decoder):
             "last_token_time_ns": "last_token_time_ns",
             "acceptance_rate": "acceptance_rate",
             "total_accepted_draft_tokens": "total_accepted_draft_tokens",
-            "total_draft_tokens": "total_draft_tokens"
+            "total_draft_tokens": "total_draft_tokens",
+            "num_input_tokens": "num_input_tokens",
+            "num_output_tokens": "num_output_tokens"
         }
         return self.convert_triton_response(triton_output, GenerationResponse,
                                             name_map)
@@ -599,5 +614,95 @@ class TritonDecoder(Decoder):
             last_token_time_ns=gen_res.last_token_time_ns,
             acceptance_rate=gen_res.acceptance_rate,
             total_accepted_draft_tokens=gen_res.total_accepted_draft_tokens,
-            total_draft_tokens=gen_res.total_draft_tokens)
+            total_draft_tokens=gen_res.total_draft_tokens,
+            num_input_tokens=gen_res.num_input_tokens,
+            num_output_tokens=gen_res.num_output_tokens)
         return response
+
+    def _load_each_model_config(self, triton_host_and_port: str,
+                                model_name: str, n_retries: int,
+                                retry_interval_sec: int):
+        import time
+
+        # NOTE: Assuming gRPC endpoint is running.
+        # TODO: Making it possible to switch HTTP/gRPC
+        import tritonclient.grpc as grpcclient
+
+        with grpcclient.InferenceServerClient(
+                url=triton_host_and_port) as client:
+            is_model_ready = False
+            for _ in range(n_retries):
+                if not client.is_model_ready(model_name):
+                    time.sleep(retry_interval_sec)
+                    continue
+                is_model_ready = True
+                break
+            if not is_model_ready:
+                raise RuntimeError(
+                    "Unexpectedly a model has not been ready yet."
+                    f" Tried URL: {triton_host_and_port}")
+
+            model_config = client.get_model_config(model_name)
+            raw_config = model_config.config
+            exclude_input_in_output = raw_config.parameters.get(
+                "exclude_input_in_output", None)
+            if exclude_input_in_output is None:
+                # `exclude_input_in_output` is not specified in parameters.
+                # Set False as a default value.
+                return False
+
+            return exclude_input_in_output.string_value.lower() in [
+                "true", "yes", "1", "t"
+            ]
+
+    @override
+    def load_model_configs_for_spec_decoding(
+            self,
+            triton_host_and_port: Optional[str] = None,
+            target_model_name: Optional[str] = None,
+            draft_model_name: Optional[str] = None,
+            n_retries: Optional[int] = 5,
+            retry_interval_sec: Optional[int] = 3):
+        if self._exclude_input_in_output_for_target is not None and self._exclude_input_in_output_for_draft is not None:
+            # Already loaded. Skip.
+            return
+        if triton_host_and_port is None:
+            raise RuntimeError("triton_host_and_port must be specified.")
+        if target_model_name is None:
+            raise RuntimeError("target_model_name must be specified.")
+        if draft_model_name is None:
+            raise RuntimeError("draft_model_name must be specified.")
+
+        self._exclude_input_in_output_for_target = self._load_each_model_config(
+            triton_host_and_port, target_model_name, n_retries,
+            retry_interval_sec)
+        self._exclude_input_in_output_for_draft = self._load_each_model_config(
+            triton_host_and_port, draft_model_name, n_retries,
+            retry_interval_sec)
+        return
+
+    @override
+    def is_input_excluded_from_output_for_target(self,
+                                                 assume_loaded: bool = False
+                                                 ) -> bool:
+        if self._exclude_input_in_output_for_target is None:
+            if assume_loaded:
+                raise RuntimeError(
+                    "exclude_input_in_output should have been loaded from target model, but not yet."
+                )
+            else:
+                return False
+        return self._exclude_input_in_output_for_target
+
+    @override
+    def is_input_excluded_from_output_for_draft(self,
+                                                assume_loaded: bool = False
+                                                ) -> bool:
+        if self._exclude_input_in_output_for_draft is None:
+            if assume_loaded:
+                raise RuntimeError(
+                    "exclude_input_in_output should have been loaded from draft model, but not yet."
+                )
+            else:
+                return False
+        return self._exclude_input_in_output_for_draft

@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include "tensorrt_llm/common/config.h"
 #include <array>
 #include <cuda_runtime_api.h>
 #include <optional>
@@ -35,7 +36,9 @@
 #include <cuda_fp4.h>
 #endif
 
-namespace tensorrt_llm::kernels::cutlass_kernels
+TRTLLM_NAMESPACE_BEGIN
+
+namespace kernels::cutlass_kernels
 {
 
 template <typename AType, typename BType, typename BScaleType, typename OType>
@@ -280,16 +283,15 @@ public:
 #else
     static constexpr bool use_fp8 = false;
     static constexpr bool use_w4afp8 = false;
-    static constexpr bool use_wfp4afp4 = false;
 #endif
     static constexpr bool use_w4_groupwise = use_w4afp8 || use_wfp4a16;
 
 #if defined(ENABLE_FP4)
     static constexpr bool use_fp4 = std::is_same_v<T, __nv_fp4_e2m1>;
-    static constexpr bool use_wfp4afp4 = std::is_same_v<T, __nv_fp8_e4m3> && std::is_same_v<WeightType, __nv_fp4_e2m1>;
+    static constexpr bool use_wfp4afp8 = std::is_same_v<T, __nv_fp8_e4m3> && std::is_same_v<WeightType, __nv_fp4_e2m1>;
 #else
     static constexpr bool use_fp4 = false;
-    static constexpr bool use_wfp4afp4 = false;
+    static constexpr bool use_wfp4afp8 = false;
 #endif
 
     void moeGemmBiasAct(GroupedGemmInput<T, WeightType, ScaleBiasType, OutputType> inputs,
@@ -337,4 +339,6 @@ private:
     size_t calcMaxWorkspaceSize(int num_experts) const;
 };
 
-} // namespace tensorrt_llm::kernels::cutlass_kernels
+} // namespace kernels::cutlass_kernels
+
+TRTLLM_NAMESPACE_END

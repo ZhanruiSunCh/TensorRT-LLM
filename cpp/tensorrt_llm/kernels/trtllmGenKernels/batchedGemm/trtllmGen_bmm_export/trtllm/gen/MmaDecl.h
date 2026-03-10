@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2025 NVIDIA CORPORATION &
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION &
  * AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +15,15 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <cassert>
+#include <cstdint>
+#include <string>
+#ifndef TLLM_GEN_EXPORT_INTERFACE
+#include "trtllm/gen/CommonUtils.h"
+#else  // TLLM_GEN_EXPORT_INTERFACE
+#include "CommonUtils.h"
+#endif // TLLM_GEN_EXPORT_INTERFACE
 
 namespace batchedGemm
 {
@@ -81,6 +90,22 @@ inline std::string mmaKindToString(MmaKind mmaKind)
     default: assert(false); return "Unsupported type";
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Get the TMEM column stride per group.
+// A group is one or more MMA instructions that share the same TMEM columns.
+inline int32_t getTmemColStridePerGroup(int32_t mmaMn, int32_t mmaK, [[maybe_unused]] int32_t kGroupSize)
+{
+    int32_t colStride = 2 * ceilDiv(mmaMn, 64);
+    if (mmaK == 96)
+    {
+        colStride = std::max(4, colStride);
+    }
+    return colStride;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 

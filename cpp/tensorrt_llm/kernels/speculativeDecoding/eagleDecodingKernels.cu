@@ -15,11 +15,13 @@
  */
 
 #include "tensorrt_llm/common/assert.h"
+#include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/common/cudaTypeUtils.cuh"
 #include "tensorrt_llm/common/cudaUtils.h"
 #include "tensorrt_llm/common/memoryUtils.h"
 #include "tensorrt_llm/common/reduceKernelUtils.cuh"
 #include "tensorrt_llm/kernels/speculativeDecoding/eagleDecodingKernels.h"
+
 #include "tensorrt_llm/kernels/speculativeDecoding/explicitDraftTokensKernels.h"
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -32,7 +34,9 @@
 using namespace tensorrt_llm::common;
 using namespace tensorrt_llm::runtime;
 
-namespace tensorrt_llm::kernels::speculative_decoding
+TRTLLM_NAMESPACE_BEGIN
+
+namespace kernels::speculative_decoding
 {
 namespace
 {
@@ -504,7 +508,7 @@ __global__ void prepareGenEagleNetInputsKernel(SizeType32* nextSequenceLengths, 
     BlockScan(tempStorage.scan).ExclusiveSum(numNextLogits, outputLastIndicesBase);
     // Sync because tempStorage is reused.
     __syncthreads();
-    auto const maxGenLength = BlockReduce(tempStorage.reduce).Reduce(nextDraftLen, cub::Max());
+    auto const maxGenLength = BlockReduce(tempStorage.reduce).Reduce(nextDraftLen, cuda::maximum());
 
     // Thread 0 has the result.
     if (bid == 0)
@@ -2321,4 +2325,6 @@ void invokeCopyFinalDraftTokens(SizeType32 batchSize, SizeType32 maxDecodingDraf
     sync_check_cuda_error(stream);
 }
 
-} // namespace tensorrt_llm::kernels::speculative_decoding
+} // namespace kernels::speculative_decoding
+
+TRTLLM_NAMESPACE_END

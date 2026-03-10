@@ -15,6 +15,7 @@
  */
 #include "tensorrt_llm/kernels/decoderMaskedMultiheadAttention/decoderXQAImplPrecompiled.h"
 
+#include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/common/cudaDriverWrapper.h"
 #include "tensorrt_llm/common/envUtils.h"
 #include "tensorrt_llm/common/workspace.h"
@@ -33,7 +34,9 @@
 
 using namespace tensorrt_llm::common;
 
-namespace tensorrt_llm::kernels
+TRTLLM_NAMESPACE_BEGIN
+
+namespace kernels
 {
 
 class XQAKernelList
@@ -44,7 +47,7 @@ public:
     XQAKernelList(Data_type type, unsigned int sm)
         : mDriver(tensorrt_llm::common::CUDADriverWrapper::getInstance())
         , mDataType(type)
-        , mKernelMetaCount(sizeof(sXqaKernelMetaInfo) / sizeof(sXqaKernelMetaInfo[0]))
+        , mKernelMetaCount(sXqaKernelMetaInfoSize)
         , mKernelMeta(&sXqaKernelMetaInfo[0])
         , mSM(sm)
     {
@@ -224,8 +227,7 @@ public:
         preprocessingParams.cu_seq_lens = xqaParams.multi_query_tokens ? launchParams.cu_seq_lens : nullptr;
         preprocessingParams.rotary_embedding_inv_freq = rotary_inv_freq_buf;
         preprocessingParams.rotary_coef_cache_buffer = xqaParams.rotary_cos_sin;
-        preprocessingParams.kvScaleOrigQuant = xqaParams.kv_scale_orig_quant;
-        preprocessingParams.kv_cache_scale_factors = nullptr;
+        preprocessingParams.qkv_scale_orig_quant = xqaParams.kv_scale_orig_quant;
         preprocessingParams.spec_decoding_position_offsets = xqaParams.spec_decoding_position_offsets;
         preprocessingParams.mrope_position_deltas = xqaParams.mrope_position_deltas;
         // Scalar parameters.
@@ -259,7 +261,7 @@ public:
         invokeQKVPreprocessing<T, KVCacheBuffer>(preprocessingParams, stream);
         sync_check_cuda_error(stream);
 
-        XQAKernelRuntimeHashKey hash_key = getRuntimeHashKeyFromXQAParams(xqaParams, false);
+        XQAKernelRuntimeHashKey hash_key = getRuntimeHashKeyFromXQAParams(xqaParams, false, mSM);
         auto const findIter = mFunctions.find(hash_key);
 
         TLLM_CHECK_WITH_INFO(findIter != mFunctions.end(), "XQAKernelFunc not found.");
@@ -392,11 +394,11 @@ public:
 
     static XQAKernelLoader& Get()
     {
-        int device_id = tensorrt_llm::common::getDevice();
         static std::unique_ptr<XQAKernelLoader> s_factory[32] = {nullptr};
+        int const device_id = tensorrt_llm::common::getDevice();
+        TLLM_CHECK_WITH_INFO(device_id < 32, "Invalid device_id %d (must be < 32)", device_id);
         if (s_factory[device_id] == nullptr)
         {
-            assert(device_id <= 32);
             s_factory[device_id] = std::make_unique<XQAKernelLoader>(XQAKernelLoader());
         }
 
@@ -491,6 +493,10 @@ bool DecoderXQAImplPrecompiled::shouldUse(XQAParams const& xqaParams, bool forCo
     {
         SUPPORT_RETURN_FALSE("streaming-llm");
     }
+    if (xqaParams.skip_softmax_threshold_scale_factor != 0)
+    {
+        SUPPORT_RETURN_FALSE("skip_softmax_threshold_scale_factor");
+    }
 
     // OPTIMIZE: For the standard generation-phase MHA, there are still extra limitations.
     // NOTE: Medusa mode = Multi_query_tokens > 1.
@@ -558,4 +564,6 @@ void DecoderXQAImplPrecompiled::runWithKVBlockArray(
     runDispatchBuffer<KVBlockArray>(xqa_params, kv_block_array, stream);
 }
 
-} // namespace tensorrt_llm::kernels
+} // namespace kernels
+
+TRTLLM_NAMESPACE_END

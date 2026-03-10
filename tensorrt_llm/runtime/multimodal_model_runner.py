@@ -27,7 +27,8 @@ from transformers import (AutoConfig, AutoModelForCausalLM, AutoProcessor,
                           AutoTokenizer)
 
 from .. import profiler
-from .._utils import (mpi_rank, str_dtype_to_torch, str_dtype_to_trt,
+from .._utils import (maybe_pin_memory, mpi_rank, prefer_pinned,
+                      str_dtype_to_torch, str_dtype_to_trt,
                       supports_inflight_batching, torch_dtype_to_trt,
                       trt_dtype_to_torch)
 from ..functional import RopeEmbeddingUtils, RotaryScalingType
@@ -692,11 +693,10 @@ class MultimodalModelRunner:
 
         # Phi-4-multimodal uses pytorch engine due to issues with creating TRT engine.
         if self.model_type == "phi-4-multimodal":
-            model = AutoModelForCausalLM.from_pretrained(
-                self.args.hf_model_dir,
-                torch_dtype=torch.float16,
-                trust_remote_code=True,
-                device_map='cpu')
+            model = AutoModelForCausalLM.from_pretrained(self.args.hf_model_dir,
+                                                         dtype=torch.float16,
+                                                         trust_remote_code=True,
+                                                         device_map='cpu')
             self.vision_model = model.model.embed_tokens_extend.image_embed.to(
                 self.device).eval()
             self.image_newlines = {}
@@ -707,11 +707,10 @@ class MultimodalModelRunner:
             return
 
         if self.model_type == "phi-3-vision":
-            model = AutoModelForCausalLM.from_pretrained(
-                self.args.hf_model_dir,
-                torch_dtype=torch.float16,
-                trust_remote_code=True,
-                device_map='cpu')
+            model = AutoModelForCausalLM.from_pretrained(self.args.hf_model_dir,
+                                                         dtype=torch.float16,
+                                                         trust_remote_code=True,
+                                                         device_map='cpu')
             self.vision_model = model.model.vision_embed_tokens.to(
                 self.device).eval()
 
@@ -765,7 +764,7 @@ class MultimodalModelRunner:
     def init_audio_encoder(self):
         assert self.model_type == "phi-4-multimodal"
         model = AutoModelForCausalLM.from_pretrained(self.args.hf_model_dir,
-                                                     torch_dtype=torch.float16,
+                                                     dtype=torch.float16,
                                                      trust_remote_code=True,
                                                      device_map='cpu')
         self.audio_model = model.model.embed_tokens_extend.audio_embed.to(
@@ -859,7 +858,7 @@ class MultimodalModelRunner:
 
         from transformers import CLIPImageProcessor
         processor = CLIPImageProcessor.from_pretrained(
-            "openai/clip-vit-large-patch14", torch_dtype=torch.bfloat16)
+            "openai/clip-vit-large-patch14", dtype=torch.bfloat16)
         frames = processor.preprocess(frames,
                                       return_tensors="pt")['pixel_values']
         # make dtype consistent with vision encoder
@@ -1651,9 +1650,11 @@ class MultimodalModelRunner:
             # CUDA Stream Overlapping Requirements:
             # 1. Both memory copy stream and kernel execution stream must be non-default streams
             # 2. For host<->device transfers (H2D/D2H), host memory MUST be page-locked (pinned)
+            # NOTE: pinning is skipped under Confidential Compute
+            # (see maybe_pin_memory() and prefer_pinned())
             pinned_embeds = torch.empty_like(image_embeds,
                                              device='cpu',
-                                             pin_memory=True)
+                                             pin_memory=prefer_pinned())
             pinned_embeds.copy_(image_embeds, non_blocking=True)
             image_embeds = pinned_embeds
 
@@ -2142,7 +2143,9 @@ class MultimodalModelRunner:
                     # CUDA Stream Overlapping Requirements:
                     # 1. Both memory copy stream and kernel execution stream must be non-default streams
                     # 2. For host<->device transfers (H2D/D2H), host memory MUST be page-locked (pinned)
-                    prompt_table = prompt_table.pin_memory().to(
+                    # NOTE: pinning is skipped under Confidential Compute
+                    # (see maybe_pin_memory() and prefer_pinned())
+                    prompt_table = maybe_pin_memory(prompt_table).to(
                         dtype=self.model.dtype)
                 else:
                     prompt_table = prompt_table.cuda().to(

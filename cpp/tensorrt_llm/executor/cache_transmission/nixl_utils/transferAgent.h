@@ -30,8 +30,27 @@ struct NixlHelper
     [[nodiscard]] static nixl_mem_t convert(MemoryType type);
     [[nodiscard]] static nixlBasicDesc convert(MemoryDesc const& desc);
     [[nodiscard]] static nixl_reg_dlist_t convertRegDlist(RegisterDescs const& descs);
+    [[nodiscard]] static nixl_reg_dlist_t convertRegDlist(FileDescs const& descs);
     [[nodiscard]] static nixl_xfer_op_t convert(TransferOp const& op);
     [[nodiscard]] static nixl_xfer_dlist_t convertXferDist(TransferDescs const& descs);
+    [[nodiscard]] static nixl_xfer_dlist_t convertXferDist(FileDescs const& descs);
+    static void posixGpuToFileFallback(MemoryDescs const& memoryDesc, FileDescs const& fileDescs);
+    static void posixFileToGpuFallback(MemoryDescs const& memoryDesc, FileDescs const& fileDescs);
+
+    /// @brief Coalesce contiguous memory regions to reduce memory registration overhead.
+    /// Adjacent memory regions with the same deviceId will be merged into a single region.
+    /// @param descs Memory descriptors to coalesce
+    /// @return Coalesced MemoryDescs
+    [[nodiscard]] static MemoryDescs coalesceMemoryDescs(MemoryDescs const& descs);
+
+    /// @brief Coalesce contiguous memory regions in src and dst to reduce transfer count.
+    /// If src[i] and src[i+1] are contiguous, and dst[i] and dst[i+1] are also contiguous
+    /// (with same deviceId), they will be merged into a single transfer.
+    /// @param srcDescs Source memory descriptors
+    /// @param dstDescs Destination memory descriptors
+    /// @return Pair of coalesced (src, dst) MemoryDescs
+    [[nodiscard]] static std::pair<MemoryDescs, MemoryDescs> coalesceTransferDescs(
+        TransferDescs const& srcDescs, TransferDescs const& dstDescs);
 };
 
 class NixlTransferStatus final : public TransferStatus
@@ -41,7 +60,7 @@ public:
 
     [[nodiscard]] bool isCompleted() const override;
 
-    void wait() const override;
+    [[nodiscard]] TransferState wait(int64_t timeout_ms = -1) const override;
 
 private:
     nixlAgent* mRawAgent{};
@@ -80,9 +99,9 @@ public:
 
     [[nodiscard]] std::unordered_map<std::string, std::vector<SyncMessage>> getNotifiedSyncMessages() override;
 
-    ConnectionInfoType getConnectionInfo() override;
+    ConnectionInfoType getLocalConnectionInfo() override;
 
-    void connectRemoteAgent(std::string const& name, ConnectionInfoType const& connectionInfo) override;
+    void loadRemoteAgent(std::string const& name, ConnectionInfoType const& connectionInfo) override;
 
     bool checkRemoteDescs(std::string const& name, MemoryDescs const& memoryDescs) override;
 
@@ -97,6 +116,28 @@ private:
     std::vector<char> mDRamDstBuffer;
 };
 
+class NixlLoopbackAgent final : public BaseLoopbackAgent
+{
+public:
+    NixlLoopbackAgent(BaseAgentConfig const& config);
+    virtual ~NixlLoopbackAgent() = default;
+
+    virtual void executeLoopbackRequest(
+        MemoryDescs const& memoryDescs, FileDescs const& fileDescs, bool isOffload) override;
+
+private:
+    int registerMemory(MemoryDescs const& descs);
+    int deregisterMemory(MemoryDescs const& descs);
+    int registerFiles(FileDescs const& descs);
+    int deregisterFiles(FileDescs const& descs);
+
+    [[nodiscard]] std::unique_ptr<TransferStatus> submitLoopbackRequests(
+        MemoryDescs const& memoryDescs, FileDescs const& filedescs, bool isOffload);
+
+    std::unique_ptr<nixlAgent> mRawAgent;
+    std::string mName;
+};
+
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
@@ -105,6 +146,11 @@ private:
 extern "C"
 {
     [[nodiscard]] std::unique_ptr<BaseTransferAgent> createNixlTransferAgent(BaseAgentConfig const* config);
+}
+
+extern "C"
+{
+    [[nodiscard]] std::shared_ptr<BaseLoopbackAgent> createNixlLoopbackAgent(BaseAgentConfig const* config);
 }
 
 #if defined(__clang__)

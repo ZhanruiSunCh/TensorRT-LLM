@@ -16,6 +16,7 @@
  */
 
 #pragma once
+#include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/common/cudaFp8Utils.h"
 #include "tensorrt_llm/common/workspace.h"
 #include "tensorrt_llm/cutlass_extensions/include/cutlass_extensions/gemm_configs.h"
@@ -37,9 +38,7 @@
 #include <cuda_fp4.h>
 #endif
 
-namespace tensorrt_llm
-{
-
+TRTLLM_NAMESPACE_BEGIN
 // Note update moe.py to match
 enum class ActivationType
 {
@@ -195,8 +194,7 @@ struct TmaWarpSpecializedGroupedGemmInput
 
     struct INT4GroupwiseParams
     {
-        constexpr static int int4_group_size = 128;
-        constexpr static int wfp4a16_group_size = 32;
+        constexpr static int group_size = 128; // Unused, hard-coded to 128
         bool enabled = false;
         using SFA = __nv_bfloat16;
         using SFB = __nv_bfloat16; // Unused
@@ -316,4 +314,4 @@ private:
     size_t calcMaxWorkspaceSize(int num_experts) const;
 };
 
-} // namespace tensorrt_llm
+TRTLLM_NAMESPACE_END

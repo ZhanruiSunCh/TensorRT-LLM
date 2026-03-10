@@ -1,12 +1,25 @@
 from pathlib import Path
+from typing import Optional
 
 import click
 
 from tensorrt_llm.bench.benchmark.low_latency import latency_command
 from tensorrt_llm.bench.benchmark.throughput import throughput_command
+from tensorrt_llm.bench.benchmark.visual_gen import visual_gen_command
 from tensorrt_llm.bench.build.build import build_command
 from tensorrt_llm.bench.dataclasses.general import BenchmarkEnvironment
+from tensorrt_llm.bench.dataset.prepare_dataset import prepare_dataset
 from tensorrt_llm.logger import logger, severity_map
+
+
+class NotRequiredForHelp(click.Option):
+    """A click.Option that is not enforced as required when --help is in args."""
+
+    def handle_parse_result(self, ctx, opts, args):
+        help_flags = ctx.help_option_names or ['--help']
+        if any(arg in help_flags for arg in args):
+            self.required = False
+        return super().handle_parse_result(ctx, opts, args)
 
 
 @click.group(name="trtllm-bench", context_settings={'show_default': True})
@@ -15,6 +28,7 @@ from tensorrt_llm.logger import logger, severity_map
     "-m",
     required=True,
     type=str,
+    cls=NotRequiredForHelp,
     help="The Huggingface name of the model to benchmark.",
 )
 @click.option(
@@ -37,6 +51,11 @@ from tensorrt_llm.logger import logger, severity_map
               type=click.Choice(severity_map.keys()),
               default='info',
               help="The logging level.")
+@click.option("--revision",
+              type=str,
+              default=None,
+              help="The revision to use for the HuggingFace model "
+              "(branch name, tag name, or commit id).")
 @click.pass_context
 def main(
     ctx,
@@ -44,11 +63,16 @@ def main(
     model_path: Path,
     workspace: Path,
     log_level: str,
+    revision: Optional[str],
 ) -> None:
     logger.set_level(log_level)
+    if model is None:
+        return
+
     ctx.obj = BenchmarkEnvironment(model=model,
                                    checkpoint_path=model_path,
-                                   workspace=workspace)
+                                   workspace=workspace,
+                                   revision=revision)
 
     # Create the workspace where we plan to store intermediate files.
     ctx.obj.workspace.mkdir(parents=True, exist_ok=True)
@@ -57,6 +81,8 @@ def main(
 main.add_command(build_command)
 main.add_command(throughput_command)
 main.add_command(latency_command)
+main.add_command(prepare_dataset)
+main.add_command(visual_gen_command)
 
 if __name__ == "__main__":
     main()

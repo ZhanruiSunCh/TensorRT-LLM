@@ -1,13 +1,13 @@
 # Recurrent Drafter (ReDrafter) Speculative Decoding
 
-This document describes how to build and run a model using the ReDrafter speculative decoding technique ([`Github`](https://github.com/apple/ml-recurrent-drafter), [`Paper`](https://arxiv.org/abs/2403.09919)) in TensorRT-LLM on single GPU, single node multiple GPU.
+This document describes how to build and run a model using the ReDrafter speculative decoding technique ([`Github`](https://github.com/apple/ml-recurrent-drafter), [`Paper`](https://arxiv.org/abs/2403.09919)) in TensorRT LLM on single GPU, single node multiple GPU.
 
 ## Overview
 Similar to other speculative decoding techniques, ReDrafter contains two major components: base LLM model and a drafter model which contains one language model (LM) head.
 
 The TensorRT-LLM's ReDrafter implementation can be found in [tensorrt_llm/models/redrafter/model.py](../../tensorrt_llm/models/redrafter/model.py), which combines the base model and the drafter definition which can be found in [tensorrt_llm/models/redrafter/model.py](../../tensorrt_llm/models/redrafter/drafter.py).
 
-For more information about ReDrafter visit [speculative decoding documentation](https://nvidia.github.io/TensorRT-LLM/advanced/speculative-decoding.html).
+For more information about ReDrafter visit [speculative decoding documentation](https://nvidia.github.io/TensorRT-LLM/features/speculative-decoding.html).
 
 ReDrafter has 3 additional hyperparameter that you can control for speculative decoding:
 - `redrafter_num_beams`: the number of paths to explore for speculation using beam search. Default is set to `5`.
@@ -26,7 +26,7 @@ While choosing a large number of beams and maximum draft length per beam can lea
   * Tensor Parallel
 
 ## Usage
-The TensorRT-LLM ReDrafter example code is located in [`examples/redrafter`](./). There is one [`convert_checkpoint.py`](./convert_checkpoint.py) file to convert and build the [TensorRT](https://developer.nvidia.com/tensorrt) engine(s) needed to run models with ReDrafter decoding support.
+The TensorRT LLM ReDrafter example code is located in [`examples/redrafter`](./). There is one [`convert_checkpoint.py`](./convert_checkpoint.py) file to convert and build the [TensorRT](https://developer.nvidia.com/tensorrt) engine(s) needed to run models with ReDrafter decoding support.
 
 **NOTE**: At the time of writing this, the Drafter checkpoint is not public. The following assumes that the base model is Vicuna 7B and you have access to a Drafter checkpoint for this model.
 
@@ -41,7 +41,7 @@ git clone https://huggingface.co/lmsys/vicuna-7b-v1.3
 # assuming the drafter checkpoint is located in dir "vicuna-7b-drafter"
 ```
 
-We use `convert_checkpoint.py` script to convert the model for ReDrafter decoding into TensorRT-LLM checkpoint format.
+We use `convert_checkpoint.py` script to convert the model for ReDrafter decoding into TensorRT LLM checkpoint format.
 You can specify the 3 hyperparameters (described above) during this conversion. The resulting config.json file can be modified to alter these hyperparameters before the engine building process.
 
 ```bash
