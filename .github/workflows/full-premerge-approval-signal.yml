@@ -26,7 +26,8 @@ permissions:
 jobs:
   evaluate-full-approval:
     if: >-
-      github.repository == 'NVIDIA/TensorRT-LLM' &&
+      github.repository == 'ZhanruiSunCh/TensorRT-LLM' &&
+      github.event.pull_request.base.ref == 'test/full-premerge-approval-e2e-base' &&
       github.event.review.state == 'approved'
     runs-on: ubuntu-latest
     steps:

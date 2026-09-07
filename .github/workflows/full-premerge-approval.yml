@@ -39,7 +39,7 @@ permissions:
 jobs:
   auto-full-premerge-approval:
     if: >-
-      github.repository == 'NVIDIA/TensorRT-LLM' &&
+      github.repository == 'ZhanruiSunCh/TensorRT-LLM' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
