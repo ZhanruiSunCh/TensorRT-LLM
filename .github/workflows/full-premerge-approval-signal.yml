@@ -18,7 +18,7 @@ run-name: "Full approval re-check for PR #${{ github.event.pull_request.number }
 
 on:
   pull_request_review:
-    types: [submitted, dismissed]
+    types: [submitted]
 
 permissions:
   pull-requests: read
@@ -26,9 +26,9 @@ permissions:
 jobs:
   evaluate-full-approval:
     if: >-
-      github.repository == 'NVIDIA/TensorRT-LLM' &&
-      (github.event.action == 'dismissed' ||
-       github.event.review.state == 'approved')
+      github.repository == 'ZhanruiSunCh/TensorRT-LLM' &&
+      github.event.pull_request.base.ref == 'test/full-premerge-unresolved-e2e-base' &&
+      github.event.review.state == 'approved'
     runs-on: ubuntu-latest
     steps:
       - name: Publish approval candidate
@@ -57,6 +57,23 @@ jobs:
                   pullRequest(number: $number) {
                     reviewDecision
                     state
+                    latestOpinionatedReviews(first: 100, writersOnly: true) {
+                      nodes {
+                        state
+                      }
+                      pageInfo {
+                        hasNextPage
+                      }
+                    }
+                    reviewThreads(first: 100) {
+                      nodes {
+                        isResolved
+                        isOutdated
+                      }
+                      pageInfo {
+                        hasNextPage
+                      }
+                    }
                   }
                 }
               }
@@ -73,7 +90,27 @@ jobs:
                 console.log(`PR #${pullNumber} is not open.`);
                 return;
               }
-              if (pullRequest.reviewDecision === 'APPROVED') {
+              const latestOpinions = pullRequest.latestOpinionatedReviews?.nodes ?? [];
+              const hasApproval = latestOpinions.some(
+                (review) => review.state === 'APPROVED'
+              );
+              const hasChangesRequested = latestOpinions.some(
+                (review) => review.state === 'CHANGES_REQUESTED'
+              );
+              const hasUnresolvedConversation =
+                (pullRequest.reviewThreads?.nodes ?? []).some(
+                  (thread) => !thread.isResolved && !thread.isOutdated
+                );
+              const opinionsComplete =
+                pullRequest.latestOpinionatedReviews?.pageInfo?.hasNextPage === false;
+              const fullyApproved =
+                pullRequest.reviewDecision === 'APPROVED' ||
+                (pullRequest.reviewDecision === null &&
+                 opinionsComplete &&
+                 hasApproval &&
+                 !hasChangesRequested &&
+                 hasUnresolvedConversation);
+              if (fullyApproved) {
                 console.log(`PR #${pullNumber} is fully approved.`);
                 return;
               }
@@ -99,8 +136,8 @@ jobs:
               const summary =
                 `PR #${pullNumber} is not fully approved (reviewDecision: ` +
                 `\`${pullRequest.reviewDecision || 'NOT_AVAILABLE'}\`).\n\n${detail}\n\n` +
-                'GitHub reviewDecision remains authoritative; branch protection, rulesets, ' +
-                'CODEOWNERS, or a blocking review may impose additional requirements.';
+                'GitHub review requirements, CODEOWNERS, or a blocking review may require ' +
+                'additional approvals. Unresolved review conversations are evaluated separately.';
               core.notice(summary.replaceAll('\n', ' '));
               await core.summary
                 .addHeading('Full pre-merge approval is still required')
