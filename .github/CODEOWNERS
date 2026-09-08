@@ -511,3 +511,6 @@
 
 # Uncomment only on release branches (e.g. release/0.19):
 # * @NVIDIA/trt-llm-release-branch-approval
+
+# Fork-only full approval workflow test.
+/fork-e2e-case.txt @ZhanruiSunCh
