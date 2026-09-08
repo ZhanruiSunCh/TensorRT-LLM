@@ -98,6 +98,7 @@ jobs:
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                   pullRequest(number: $number) {
+                    baseRefName
                     reviewDecision
                     state
                     latestOpinionatedReviews(first: 100, writersOnly: true) {
@@ -145,13 +146,42 @@ jobs:
                 );
               const opinionsComplete =
                 pullRequest.latestOpinionatedReviews?.pageInfo?.hasNextPage === false;
+              let requiredApprovalCountSatisfied = false;
+              if (pullRequest.reviewDecision === null &&
+                  opinionsComplete &&
+                  hasApproval &&
+                  !hasChangesRequested &&
+                  hasUnresolvedConversation) {
+                try {
+                  const response = await github.request(
+                    'GET /repos/{owner}/{repo}/rules/branches/{branch}',
+                    { ...context.repo, branch: pullRequest.baseRefName }
+                  );
+                  const approvalCounts = response.data
+                    .filter((rule) => rule.type === 'pull_request')
+                    .map((rule) => rule.parameters?.required_approving_review_count)
+                    .filter((count) => Number.isSafeInteger(count));
+                  if (approvalCounts.length === 0) {
+                    core.warning('Could not determine the required approval count.');
+                  } else {
+                    const approvalCount = latestOpinions.filter(
+                      (review) => review.state === 'APPROVED'
+                    ).length;
+                    requiredApprovalCountSatisfied =
+                      approvalCount >= Math.max(...approvalCounts);
+                  }
+                } catch (error) {
+                  core.warning(`Could not read branch approval rules: ${error.message}`);
+                }
+              }
               const fullyApproved =
                 pullRequest.reviewDecision === 'APPROVED' ||
                 (pullRequest.reviewDecision === null &&
                  opinionsComplete &&
                  hasApproval &&
                  !hasChangesRequested &&
-                 hasUnresolvedConversation);
+                 hasUnresolvedConversation &&
+                 requiredApprovalCountSatisfied);
               if (!fullyApproved) {
                 console.log(`PR #${pullNumber} is not fully approved; skipping auto-labeling.`);
                 return;
