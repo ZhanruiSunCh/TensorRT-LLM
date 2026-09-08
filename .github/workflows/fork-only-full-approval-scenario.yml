@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Fork-only full approval scenario
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-test-pr:
+    if: github.repository == 'ZhanruiSunCh/TensorRT-LLM'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create fork-only test pull request
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const base = 'test/full-premerge-unresolved-e2e-base';
+            const branch = `test/full-premerge-unresolved-e2e-case-${context.runId}`;
+            const baseRef = await github.rest.git.getRef({
+              ...context.repo,
+              ref: `heads/${base}`,
+            });
+            await github.rest.git.createRef({
+              ...context.repo,
+              ref: `refs/heads/${branch}`,
+              sha: baseRef.data.object.sha,
+            });
+            await github.rest.repos.createOrUpdateFileContents({
+              ...context.repo,
+              path: 'fork-e2e-case.txt',
+              branch,
+              message: 'Add fork-only full approval test case',
+              content: Buffer.from(`run ${context.runId}\n`).toString('base64'),
+            });
+            const pull = await github.rest.pulls.create({
+              ...context.repo,
+              base,
+              head: branch,
+              title: `Fork-only full approval E2E ${context.runId}`,
+              body: 'Temporary fork-only validation. Never opened against NVIDIA.',
+            });
+            core.notice(`Created fork PR #${pull.data.number}`);
