@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+name: Temporary premerge synchronize regression
+'on':
+  pull_request_target:
+    types:
+    - labeled
+    - synchronize
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Isolated fixture PR number
+        required: true
+        type: string
+      operation:
+        description: Fixture operation
+        required: true
+        type: choice
+        options:
+        - check
+        - approve
+        - request-changes
+        default: check
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+jobs:
+  auto-full-premerge-approval:
+    if: "(github.repository == 'ZhanruiSunCh/TensorRT-LLM' && (github.event_name == 'workflow_dispatch'\
+      \ ||\n (github.event_name == 'pull_request_target' &&\n  github.event.action == 'synchronize' &&\n\
+      \  !contains(github.event.pull_request.labels.*.name, 'ci: full pre-merge approved')) ||\n (github.event_name\
+      \ == 'workflow_run' &&\n  github.event.workflow_run.conclusion == 'success' &&\n  startsWith(github.event.workflow_run.display_title,\n\
+      \             'Full approval re-check for PR #')))) && ((github.event_name == 'pull_request_target'\
+      \ && github.event.pull_request.number == 18) || (github.event_name == 'workflow_dispatch' && inputs.operation\
+      \ == 'check' && inputs.pull_number == '18'))"
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download full approval signal
+      if: github.event_name == 'workflow_run'
+      continue-on-error: true
+      uses: actions/download-artifact@v8
+      with:
+        name: full-premerge-approval-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt
+          }}
+        path: ${{ runner.temp }}/full-premerge-approval
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Re-check approval and add label
+      if: always()
+      continue-on-error: true
+      uses: actions/github-script@v8
+      env:
+        AGENT_TOKEN: ${{ secrets.TRTLLM_AGENT_SHARED_TOKEN }}
+        DISPATCH_PULL_NUMBER: ${{ github.event.pull_request.number || inputs.pull_number }}
+        SIGNAL_PATH: ${{ runner.temp }}/full-premerge-approval/pr-number.txt
+      with:
+        github-token: ${{ secrets.TRTLLM_AGENT_SHARED_TOKEN }}
+        retries: '2'
+        script: "const { readFile } = require('node:fs/promises');\n\nif (!process.env.AGENT_TOKEN) {\n\
+          \  core.warning('TRTLLM_AGENT_SHARED_TOKEN is unavailable; skipping auto-labeling.');\n  return;\n\
+          }\n\nlet rawPullNumber = process.env.DISPATCH_PULL_NUMBER;\nif (context.eventName === 'workflow_run')\
+          \ {\n  try {\n    rawPullNumber = await readFile(process.env.SIGNAL_PATH, 'utf8');\n  } catch\
+          \ (error) {\n    core.warning(`Could not read the full approval signal: ${error.message}`);\n\
+          \    return;\n  }\n}\nrawPullNumber = rawPullNumber?.trim();\nconst pullNumber = Number(rawPullNumber);\n\
+          if (!Number.isSafeInteger(pullNumber) || pullNumber <= 0 ||\n    String(pullNumber) !== rawPullNumber)\
+          \ {\n  core.warning('The full approval signal does not contain a valid pull request number.');\n\
+          \  return;\n}\n\nconst approvalLabel = 'ci: full pre-merge approved';\nconst query = `\n  query($owner:\
+          \ String!, $repo: String!, $number: Int!) {\n    repository(owner: $owner, name: $repo) {\n\
+          \      pullRequest(number: $number) {\n        baseRefName\n        reviewDecision\n       \
+          \ state\n        latestOpinionatedReviews(first: 100, writersOnly: true) {\n          nodes\
+          \ {\n            state\n          }\n          pageInfo {\n            hasNextPage\n       \
+          \   }\n        }\n        reviewThreads(first: 100) {\n          nodes {\n            isResolved\n\
+          \          }\n          pageInfo {\n            hasNextPage\n          }\n        }\n      }\n\
+          \    }\n  }\n`;\ntry {\n  const result = await github.graphql(query, {\n    owner: context.repo.owner,\n\
+          \    repo: context.repo.repo,\n    number: pullNumber,\n  });\n  const pullRequest = result.repository?.pullRequest;\n\
+          \  if (!pullRequest || pullRequest.state !== 'OPEN') {\n    console.log(`PR #${pullNumber} is\
+          \ not open; skipping auto-labeling.`);\n    return;\n  }\n  if (pullRequest.baseRefName !==\
+          \ 'main' &&\n      !pullRequest.baseRefName.startsWith('release/')) {\n    console.log(\n  \
+          \    `PR #${pullNumber} does not target main or a release branch; ` +\n      'skipping auto-labeling.'\n\
+          \    );\n    return;\n  }\n  const latestOpinions = pullRequest.latestOpinionatedReviews?.nodes\
+          \ ?? [];\n  const hasApproval = latestOpinions.some(\n    (review) => review.state === 'APPROVED'\n\
+          \  );\n  const hasChangesRequested = latestOpinions.some(\n    (review) => review.state ===\
+          \ 'CHANGES_REQUESTED'\n  );\n  const hasUnresolvedConversation =\n    (pullRequest.reviewThreads?.nodes\
+          \ ?? []).some(\n      (thread) => !thread.isResolved\n    );\n  const opinionsComplete =\n \
+          \   pullRequest.latestOpinionatedReviews?.pageInfo?.hasNextPage === false;\n  let requiredApprovalCountSatisfied\
+          \ = false;\n  if (pullRequest.reviewDecision === null &&\n      opinionsComplete &&\n      hasApproval\
+          \ &&\n      !hasChangesRequested &&\n      hasUnresolvedConversation) {\n    try {\n      const\
+          \ response = await github.request(\n        'GET /repos/{owner}/{repo}/rules/branches/{branch}',\n\
+          \        { ...context.repo, branch: pullRequest.baseRefName }\n      );\n      const approvalCounts\
+          \ = response.data\n        .filter((rule) => rule.type === 'pull_request')\n        .map((rule)\
+          \ => rule.parameters?.required_approving_review_count)\n        .filter((count) => Number.isSafeInteger(count));\n\
+          \      if (approvalCounts.length === 0) {\n        core.warning('Could not determine the required\
+          \ approval count.');\n      } else {\n        const approvalCount = latestOpinions.filter(\n\
+          \          (review) => review.state === 'APPROVED'\n        ).length;\n        requiredApprovalCountSatisfied\
+          \ =\n          approvalCount >= Math.max(...approvalCounts);\n      }\n    } catch (error) {\n\
+          \      core.warning(`Could not read branch approval rules: ${error.message}`);\n    }\n  }\n\
+          \  const fullyApproved =\n    pullRequest.reviewDecision === 'APPROVED' ||\n    (pullRequest.reviewDecision\
+          \ === null &&\n     opinionsComplete &&\n     hasApproval &&\n     !hasChangesRequested &&\n\
+          \     hasUnresolvedConversation &&\n     requiredApprovalCountSatisfied);\n  if (!fullyApproved)\
+          \ {\n    console.log(`PR #${pullNumber} is not fully approved; skipping auto-labeling.`);\n\
+          \    return;\n  }\n\n  await github.rest.issues.addLabels({\n    owner: context.repo.owner,\n\
+          \    repo: context.repo.repo,\n    issue_number: pullNumber,\n    labels: [approvalLabel],\n\
+          \  });\n  console.log(`Added ${approvalLabel} to fully approved PR #${pullNumber}.`);\n} catch\
+          \ (error) {\n  core.warning(`Could not auto-label PR #${pullNumber}: ${error.message}`);\n}\n"
+  fixture-review:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation != 'check' && inputs.pull_number
+      == '18'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Submit isolated fixture review
+      uses: actions/github-script@v8
+      env:
+        PULL_NUMBER: ${{ inputs.pull_number }}
+        OPERATION: ${{ inputs.operation }}
+      with:
+        script: 'const pullNumber = Number(process.env.PULL_NUMBER);
+
+          const pr = await github.rest.pulls.get({...context.repo, pull_number: pullNumber});
+
+          if (context.repo.owner !== ''ZhanruiSunCh'' || context.repo.repo !== ''TensorRT-LLM'' || pr.data.head.ref
+          !== ''test/premerge-sync-e2e-20261112'' || pr.data.base.ref !== ''release/premerge-sync-e2e-20261112'')
+          throw new Error(''Not the isolated fixture'');
+
+          const event = process.env.OPERATION === ''approve'' ? ''APPROVE'' : ''REQUEST_CHANGES'';
+
+          const review = await github.rest.pulls.createReview({...context.repo, pull_number:pullNumber,
+          event, body:''Temporary fork-only approval automation regression fixture.''});
+
+          console.log(`FIXTURE_REVIEW=${review.data.state}; actor=${review.data.user.login}`);'
+run-name: 'sync-e2e PR #${{ github.event.pull_request.number || inputs.pull_number }} ${{ github.event.action
+  || inputs.operation }} ${{ github.event.pull_request.head.sha }}'
